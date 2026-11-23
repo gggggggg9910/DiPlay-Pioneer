@@ -50,6 +50,25 @@ against the Pioneer platform rather than the Camry specifically.
 
 The full list is the diff of one commit on top of upstream `v0.2.22`.
 
+## Defaults and verified options
+
+Defaults are set to the **field-verified configuration** on the Camry unit. Options outside this
+table exist in the settings UI but have **not** passed verification on this platform:
+
+| Setting | Default | Status |
+|---|---|---|
+| Connection | **Wired USB** (wireless off) | ✅ verified — the only tested path |
+| Factory audio source | **Media audio (App)** — the 401 app media slot | ✅ verified |
+| Wireless (Wi-Fi Direct / car hotspot / existing LAN) | off | ⚠️ unverified on Pioneer units |
+| USB factory audio source | off | ⚠️ experimental, unverified |
+| Bluetooth factory audio source | off | ⚠️ experimental; needs a factory pairing record, unverified |
+| HEVC video paths | disabled | no HEVC hardware decode on i.MX6; software H.264 fallback |
+| Boot auto-start | off | the head unit launches the app when the driver opens it |
+| Same-task display / launcher bubble (kept upstream 0.2.22 features) | off | ⚠️ compile-intact but unverified here |
+
+If you enable an unverified option and it misbehaves, switch back to the defaults before
+reporting an issue.
+
 ## Install note
 
 Some OEM head units enforce an install allow-list keyed by package name. This fork sets

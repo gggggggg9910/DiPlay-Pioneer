@@ -7,7 +7,7 @@ enum class PioneerSourceChoice {
  MEDIA;
  companion object {
   private const val PREFS = "pioneer_media_source"
-  fun load(context: Context): PioneerSourceChoice = runCatching { valueOf(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString("source",BLUETOOTH.name)!!) }.getOrDefault(BLUETOOTH)
+  fun load(context: Context): PioneerSourceChoice = runCatching { valueOf(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString("source",MEDIA.name)!!) }.getOrDefault(MEDIA)
   fun save(context: Context, source: PioneerSourceChoice) { context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putString("source",source.name).apply() }
  }
 }

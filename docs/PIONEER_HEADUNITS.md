@@ -59,11 +59,26 @@ verified beyond the listed unit.
 ## Behaviour notes
 
 - **Boot**: DiPlay is not launched at boot on this platform; the head unit opens it when the
-  driver does. The upstream auto-start-on-boot behaviour is intentionally not used.
+  driver opens it. The upstream auto-start-on-boot behaviour is intentionally not used.
 - **Media keys**: the Pioneer unit exposes seek/voice/MODE through its own wheel-key service;
   `WheelKeyService` bridges those into CarPlay media events.
 - **Source switching** is bounded and re-asserts audio focus, because unbounded switches made the
   OEM mixer stick on the rear zone.
+
+## Defaults (field-verified configuration)
+
+Fork defaults intentionally differ from upstream where the platform demands it:
+
+| Setting | Upstream default | Fork default | Why |
+|---|---|---|---|
+| Wireless enabled | on | **off** | never verified on Pioneer hardware; wired USB is the tested path |
+| Factory audio source (`PioneerSourceChoice`) | BLUETOOTH | **MEDIA** (401 app media slot) | the verified audio path on this unit |
+| Boot auto-start launch | launches `DiPlayActivity` | **off** | the head unit's own launcher handles app start |
+
+Options left experimental/unverified on this platform: wireless transports (Wi-Fi Direct, car
+hotspot, existing LAN), the USB and Bluetooth factory audio sources (Bluetooth additionally needs
+a factory pairing record), and upstream 0.2.22 features kept in tree (same-task display, launcher
+bubble) which compile but have not been exercised on a vehicle.
 
 ## Versioning
 
