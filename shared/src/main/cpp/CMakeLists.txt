@@ -29,7 +29,7 @@ set_target_properties(conscrypt_jni PROPERTIES IMPORTED_LOCATION "${CONSCRYPT_PR
 target_link_libraries(xcertplay_lwip log "-Wl,--no-as-needed" conscrypt_jni "-Wl,--as-needed")
 
 # FFmpeg H.264 software decoder (the "video decoder" setting's FFmpeg engine): a prebuilt static
-# libavcodec/libavutil linked into one JNI library, LGPL 2.1 with the source kept in ffmpeg-work.
+# libavcodec/libavutil linked into one JNI library, LGPL 2.1 (see docs/THIRD_PARTY_NOTICES.md).
 set(FFMPEG_PREBUILT ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/${ANDROID_ABI}/ffmpeg)
 if(EXISTS "${FFMPEG_PREBUILT}/libavcodec.a" AND EXISTS "${FFMPEG_PREBUILT}/libavutil.a")
     add_library(xcertplay_ffmpeg SHARED ffmpeg_jni.c)

@@ -5,7 +5,7 @@
 # Output: libavcodec.a + libavutil.a for armeabi-v7a / arm64-v8a / x86 / x86_64 (API 24).
 #
 # Usage:
-#   FFMMPEG_SRC=/path/to/ffmpeg-7.1.1   # configured FFmpeg source tree
+#   FFMPEG_SRC=/path/to/ffmpeg-7.1.1    # unpacked FFmpeg source tree
 #   ANDROID_NDK=/path/to/android-ndk-r27.2
 #   ./build-ffmpeg-android.sh
 #
@@ -14,12 +14,17 @@
 # native Windows NDK make cannot follow.
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 SRC="${FFMPEG_SRC:?set FFMPEG_SRC to the ffmpeg-7.1.1 source directory}"
 NDK="${ANDROID_NDK:?set ANDROID_NDK to the NDK root (r27.2)}"
 ROOT="$(pwd)/ffmpeg-build"
 TC="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin"
 MAKE="$NDK/prebuilt/windows-x86_64/bin/make.exe"
-OUT="shared/src/main/cpp/prebuilt"
+OUT="$(pwd)/shared/src/main/cpp/prebuilt"
+# configure records MSYS-style paths (/f/...), for the wrappers and the source tree alike.
+ROOT_WIN="$(cygpath -m "$ROOT" 2>/dev/null || echo "$ROOT")"
+SRC_WIN="$(cygpath -m "$SRC" 2>/dev/null || echo "$SRC")"
 
 # Assemble clang wrappers: the NDK's target-prefixed clang binaries set target+sysroot.
 mkwrap() { # $1 wrapdir  $2 clang target triple
@@ -53,14 +58,13 @@ build_lib() { # $1 abi  $2 arch  $3 cpu  $4 triple  $5 asm on/off
         $ASM_FLAGS \
         --logfile=conf.log > "$B/conf-out.log" 2>&1
     # configure records MSYS-style paths that the native Windows make cannot follow.
-    grep -rl "$ROOT" --include='*.mak' --include='Makefile' . | xargs -r sed -i "s|$ROOT|$(cygpath -m "$ROOT" 2>/dev/null || echo "$ROOT")|g"
+    grep -rl -e "$ROOT" -e "$SRC" --include='*.mak' --include='Makefile' . |
+        xargs -r sed -i -e "s|$ROOT|$ROOT_WIN|g" -e "s|$SRC|$SRC_WIN|g"
     "$MAKE" -j8 > "$B/make-out.log" 2>&1
     mkdir -p "$OUT/$ABI/ffmpeg"
     cp libavcodec/libavcodec.a libavutil/libavutil.a "$OUT/$ABI/ffmpeg/"
     echo "OK $ABI: $(ls -la "$OUT/$ABI/ffmpeg/" | awk 'NR>1{print $9}')"
 }
-
-cd "$(dirname "$0")/.."
 
 build_lib armeabi-v7a arm   armv7-a armv7a-linux-androideabi24      on
 build_lib arm64-v8a  aarch64 armv8-a aarch64-linux-android24        on
