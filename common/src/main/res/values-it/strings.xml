@@ -335,6 +335,8 @@
     <string name="s_2_4_ghz">2,4 GHz</string>
     <string name="s_2_pair_your_iphone">2 · Associa il tuo iPhone</string>
     <string name="s_300_ms_default">300 ms · predefinito</string>
+    <string name="s_20_fps_lightest_load">20 fps · carico più leggero</string>
+    <string name="s_25_fps_lighter_load">25 fps · carico più leggero</string>
     <string name="s_30_fps_lighter_load">30 fps · carico più leggero</string>
     <string name="s_3_connect">3 · Connetti</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Tocca Verifica e attiva qui sotto. Questo abilita la mappa sul quadro strumenti e l’adattamento automatico del tema. Una sessione CarPlay attiva si riconnette una volta. Poi puoi scollegare il computer.</string>
@@ -769,6 +771,8 @@
     <string name="call_echo_cancellation_description">Cerca di ridurre l’eco dell’altoparlante inviato all’interlocutore durante le chiamate CarPlay. I risultati dipendono dalla head unit. Si applica alla prossima connessione CarPlay.</string>
     <string name="call_voice_filter">Voci più chiare nelle chiamate (sperimentale)</string>
     <string name="call_voice_filter_description">Taglia i bassi dall’audio delle chiamate CarPlay. Questo può cambiare il suono delle voci. Si applica alla prossima connessione CarPlay.</string>
+    <string name="phone_own_microphone">Siri ascolta con il microfono dell’iPhone (sperimentale)</string>
+    <string name="phone_own_microphone_description">Smette di inviare il microfono dell’auto all’iPhone, quindi Siri e le chiamate registrano con il microfono dell’iPhone stesso. Voce e audio delle chiamate continuano a uscire dagli altoparlanti dell’auto. Si applica alla prossima connessione CarPlay.</string>
     <string name="phone_audio_route">Audio telefono dell’auto per le chiamate CarPlay (sperimentale)</string>
     <string name="phone_audio_route_description">Mantiene una chiamata Telecom durante le chiamate CarPlay, così l’auto passa al suo stato audio telefono e la sua cancellazione dell’eco funziona. Il cancellatore d’eco di DiPlay resta fuori da queste chiamate. La tua voce può uscire più forte o distorta. Disattivato per impostazione predefinita; si applica alla prossima chiamata.</string>
     <string name="phone_audio_route_apps">Audio telefono dell’auto per chiamate VoIP in altre app (sperimentale)</string>

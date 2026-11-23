@@ -1,14 +1,19 @@
 package com.shilapi.xcertplay.airplay
 
 import android.util.Log
+import com.shilapi.xcertplay.diagnostics.FrameTimeline
+import com.shilapi.xcertplay.diagnostics.VideoPipelineTrace
 import java.io.Closeable
 import java.io.InputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 enum class VideoCodec { H264, H265 }
 
@@ -64,6 +69,9 @@ class ScreenStream(
     private fun accept(bound: ServerSocket) {
         try {
             val accepted = bound.acceptFrom(expectedPeer) { onDiagnostic("Video: rejected sender outside the control session") }
+            accepted.tcpNoDelay = true
+            accepted.receiveBufferSize = 256 * 1024
+            accepted.sendBufferSize = 256 * 1024
             socket = accepted
             run(accepted)
         } catch (error: Exception) {
@@ -72,30 +80,72 @@ class ScreenStream(
     }
 
     private fun run(sock: Socket) {
-        var failure: Throwable? = null
+        val failure = AtomicReference<Throwable?>()
         val stats = StreamReceiveStats("video", onDiagnostic)
+        val probe = VideoPipelineTrace.open(onDiagnostic)
+        VideoPipelineTrace.registerThread("screen-read")
+        // The tail of the relay chain (usb-in and lwip-poll already run at this level): at default
+        // priority a busy head unit starved this read for up to a second while the socket held data.
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+        val timeline = FrameTimeline(onDiagnostic)
+        onDiagnostic(NativeChacha.comparisonReport())
+        // Decrypt stays off this thread. A 30–60 ms open used to stop the socket read, the 64 KB
+        // window filled, and the phone paused for a few hundred milliseconds.
+        val incoming = ArrayBlockingQueue<Incoming?>(16)
+        val worker = Thread({
+            VideoPipelineTrace.registerThread("screen-decrypt")
+            runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+            try {
+                while (true) {
+                    val item = incoming.poll(100, TimeUnit.MILLISECONDS)
+                    if (item != null) {
+                        val waitNs = System.nanoTime() - item.arrivalNanos
+                        stats.queued(waitNs, incoming.size)
+                        VideoPipelineTrace.slow("decrypt-queue", waitNs)
+                        onMessage(item.header, item.body, stats, item.arrivalNanos)
+                    }
+                    else if (closed.get() && incoming.isEmpty()) break
+                }
+            } catch (error: Exception) {
+                failure.compareAndSet(null, error)
+                safeClose(sock)
+            }
+        }, "airplay-screen-decrypt").apply { isDaemon = true; start() }
         try {
             val input = sock.getInputStream()
             while (!closed.get()) {
                 stats.reading()
                 val header = readFully(input, HEADER_LEN) ?: break
+                val headerDone = System.nanoTime()
                 val bodySize = readU32Le(header, 0)
                 if (bodySize > MAX_BODY) break
                 val body = readFully(input, bodySize) ?: break
                 val arrivalNanos = System.nanoTime()
+                VideoPipelineTrace.slow("body-read", arrivalNanos - headerDone)
+                if ((header[OPCODE_OFFSET].toInt() and 0xff) == OP_VIDEO_FRAME && bodySize > 0) {
+                    timeline.frame(ScreenCodec.senderNanos(header), arrivalNanos)
+                }
                 stats.received(HEADER_LEN + bodySize)
-                onMessage(header, body, stats, arrivalNanos)
+                incoming.put(Incoming(header, body, arrivalNanos))
+                VideoPipelineTrace.slow("receive-backpressure", System.nanoTime() - arrivalNanos)
                 stats.processed()
             }
         } catch (error: Exception) {
-            failure = error
+            failure.compareAndSet(null, error)
         } finally {
-            stats.flush(ended = true)
-            if (socket === sock) socket = null
+            val stoppedByUser = closed.get()
+            closed.set(true)
             safeClose(sock)
-            if (!closed.get()) listener.onClosed(failure)
+            worker.join(2_000)
+            timeline.flush(System.nanoTime())
+            stats.flush(ended = true)
+            probe.close()
+            if (socket === sock) socket = null
+            if (!stoppedByUser) listener.onClosed(failure.get())
         }
     }
+
+    private class Incoming(val header: ByteArray, val body: ByteArray, val arrivalNanos: Long)
 
     private fun onMessage(header: ByteArray, body: ByteArray, stats: StreamReceiveStats, arrivalNanos: Long) {
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
@@ -103,9 +153,17 @@ class ScreenStream(
                 if (body.size < ScreenCodec.TAG_SIZE) return
                 val start = System.nanoTime()
                 val payload = ScreenCodec.decryptFrame(key, frameCounter.get(), header, body)
-                stats.decrypted(System.nanoTime() - start, body.size)
-                frameCounter.incrementAndGet()
+                    .also {
+                        val duration = System.nanoTime() - start
+                        stats.decrypted(duration, body.size)
+                        VideoPipelineTrace.slow("decrypt", duration)
+                        frameCounter.incrementAndGet()
+                    }
                 if (firstFrameLogged.compareAndSet(false, true)) {
+                    onDiagnostic(
+                        "video first decrypted frame sealed=${body.size} plain=${payload.size} " +
+                            "chacha=${AirPlayCrypto.chachaImplementation}",
+                    )
                     Log.i(
                         TAG,
                         "video first decrypted frame sealed=${body.size} plain=${payload.size} " +

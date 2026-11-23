@@ -32,6 +32,44 @@ class Ntb16CodecTest {
     }
 
     @Test
+    fun oneDatagramBlockMatchesTheExistingBuilderIncludingTheShortPacketPad() {
+        for (size in listOf(1, 60, 484, 1500)) {
+            val frame = ByteArray(size) { (it * 3).toByte() }
+            val dest = ByteArray(Ntb16Codec.encodedLength(listOf(size)))
+            assertEquals(dest.size, Ntb16Codec.write(listOf(frame), 7, dest))
+            assertArrayEquals(Ntb16Codec.build(frame, 7), dest)
+            assertArrayEquals(dest, Ntb16Codec.build(listOf(frame), 7))
+        }
+    }
+
+    @Test
+    fun severalDatagramsShareOneBlockAndRoundTrip() {
+        val frames = listOf(
+            byteArrayOf(1),
+            byteArrayOf(2, 3, 4, 5, 6),
+            byteArrayOf(7, 8, 9, 10, 11, 12, 13, 14),
+        )
+        val block = Ntb16Codec.build(frames, 3)
+        assertTrue(block.size <= Ntb16Codec.MAX_OUT_BLOCK)
+        val parsed = Ntb16Codec.parse(block)
+        assertEquals(frames.size, parsed.size)
+        frames.forEachIndexed { index, frame -> assertArrayEquals(frame, parsed[index]) }
+    }
+
+    @Test
+    fun queuedFramesShareABlockUntilTheCapAndALargeFrameStaysAlone() {
+        val small = List(20) { ByteArray(64) { 1 } }
+        val groups = Ntb16Codec.chunks(small)
+        assertTrue(groups.size < small.size)
+        assertEquals(20, groups.sumOf { it.size })
+        groups.forEach { group ->
+            assertTrue(Ntb16Codec.encodedLength(group.map { it.size }) <= Ntb16Codec.MAX_OUT_BLOCK)
+        }
+        val big = ByteArray(1800)
+        assertEquals(2, Ntb16Codec.chunks(listOf(big, big)).size)
+    }
+
+    @Test
     fun overlappingDatagramsCannotMultiplyTheBlockIntoGigabytes() {
         val entries = 1_000
         val tableEnd = NDP_OFFSET + 8 + entries * 4

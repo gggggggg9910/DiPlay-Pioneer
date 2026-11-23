@@ -108,6 +108,7 @@ class IphoneUsbHost(
     fun listedDevices(): List<String> =
         usbManager.deviceList.values.map(Ch341UsbHost::describe).sorted()
 
+    /** True when Android lists a device that is not a hub; a lone hub means no USB device is seen. */
     fun listsNonHubDevice(): Boolean = usbManager.deviceList.values.any { device ->
         !isHub(device.deviceClass, (0 until device.interfaceCount).map { device.getInterface(it).interfaceClass })
     }
@@ -246,12 +247,34 @@ class IphoneUsbHost(
         if (!usbManager.hasPermission(device)) {
             throw IphoneUsbException.PermissionDenied("USB permission has not been granted")
         }
-        val connection = usbManager.openDevice(device)
-            ?: throw IphoneUsbException.DeviceUnavailable("UsbManager could not open the iPhone")
+        var current = usbManager.deviceList[device.deviceName]
+            ?: throw IphoneUsbException.DeviceUnavailable("iPhone enumeration changed before USB open")
+        if (current.vendorId != device.vendorId || current.productId != device.productId) {
+            throw IphoneUsbException.DeviceUnavailable("iPhone USB node was replaced")
+        }
+        var connection = usbManager.openDevice(current)
+        if (connection == null) {
+            // One short retry only before any mode request has been sent.
+            try { Thread.sleep(150) } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IphoneUsbException.DeviceUnavailable("USB open retry interrupted", error)
+            }
+            current = usbManager.deviceList[device.deviceName]
+                ?: throw IphoneUsbException.DeviceUnavailable("iPhone disappeared before USB open retry")
+            if (current.vendorId != device.vendorId || current.productId != device.productId) {
+                throw IphoneUsbException.DeviceUnavailable("iPhone USB node changed during retry")
+            }
+            if (!usbManager.hasPermission(current)) {
+                throw IphoneUsbException.PermissionDenied("USB permission changed before open retry")
+            }
+            connection = usbManager.openDevice(current)
+            runCatching { onDiagnostic("USB open retry opened=${connection != null}") }
+        }
+        val opened = connection ?: throw IphoneUsbException.DeviceUnavailable("UsbManager could not open the iPhone after refresh")
         try {
-            operation(connection)
+            operation(opened)
         } finally {
-            connection.close()
+            opened.close()
         }
     } catch (error: IphoneUsbException) {
         TransitionResult.Failed(error)
@@ -405,6 +428,10 @@ class IphoneUsbHost(
     }
 
     companion object {
+        internal fun isHub(deviceClass: Int, interfaceClasses: List<Int>): Boolean =
+            deviceClass == UsbConstants.USB_CLASS_HUB ||
+                interfaceClasses.isNotEmpty() && interfaceClasses.all { it == UsbConstants.USB_CLASS_HUB }
+
         private const val USB_VENDOR_DEVICE_IN = 0xc0
         private const val USB_STANDARD_DEVICE_IN = 0x80
         private const val GET_CONFIGURATION_REQUEST = 0x08
@@ -427,10 +454,6 @@ class IphoneUsbHost(
             return "CarPlay USB mode request rejected; current mode=$current " +
                 "usbVersion=${deviceVersion ?: "unknown"} configurations=$configurations"
         }
-
-        internal fun isHub(deviceClass: Int, interfaceClasses: List<Int>): Boolean =
-            deviceClass == UsbConstants.USB_CLASS_HUB ||
-                interfaceClasses.isNotEmpty() && interfaceClasses.all { it == UsbConstants.USB_CLASS_HUB }
     }
 
 }
@@ -454,6 +477,8 @@ class Iap2UsbSession internal constructor(
     private var pendingRead: UsbRequest? = null
     private val readQueuePolicy = UsbReadQueuePolicy.forCurrentPlatform()
     private val requests = UsbRequestQueue(connection, "usbmux-read-reaper")
+    // readLock serializes use; timeout cancellation is drained before the next reuse.
+    private val readBuffer = ByteBuffer.allocateDirect(USBMUX_READ_CHUNK_BYTES)
 
     fun write(data: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
         checkOpen()
@@ -480,7 +505,8 @@ class Iap2UsbSession internal constructor(
                 )
             }
             initialized = true
-            val buffer = ByteBuffer.allocateDirect(USBMUX_READ_CHUNK_BYTES)
+            val buffer = readBuffer
+            buffer.clear()
             val queueResult = synchronized(stateLock) {
                 checkOpenLocked()
                 pendingRead = request

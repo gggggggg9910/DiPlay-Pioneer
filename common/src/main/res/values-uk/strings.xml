@@ -338,6 +338,8 @@
     <string name="s_2_4_ghz">2,4 ГГц</string>
     <string name="s_2_pair_your_iphone">2 · Спарте свій iPhone</string>
     <string name="s_300_ms_default">300 мс · типово</string>
+    <string name="s_20_fps_lightest_load">20 кадрів/с · менше навантаження</string>
+    <string name="s_25_fps_lighter_load">25 кадрів/с · менше навантаження</string>
     <string name="s_30_fps_lighter_load">30 кадрів/с · менше навантаження</string>
     <string name="s_3_connect">3 · Підключіться</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Натисніть «Перевірити й увімкнути» нижче. Це ввімкне карту на панелі приладів та автоматичне стеження за темою. Активний сеанс CarPlay перепідключиться один раз. Після цього комп’ютер можна відключити.</string>
@@ -704,6 +706,8 @@
     <string name="call_echo_cancellation_description">Намагається зменшити луну динаміків, яку чує співрозмовник під час дзвінків CarPlay. Результат залежить від головного пристрою. Застосовується під час наступного підключення CarPlay.</string>
     <string name="call_voice_filter">Чіткіші голоси у дзвінках (експериментально)</string>
     <string name="call_voice_filter_description">Зменшує баси у дзвінках CarPlay. Може змінити звучання голосів. Застосовується під час наступного підключення CarPlay.</string>
+    <string name="phone_own_microphone">Siri слухає мікрофоном самого iPhone (експериментально)</string>
+    <string name="phone_own_microphone_description">Мікрофон автомобіля більше не надсилається на iPhone: Siri й дзвінки записуються власним мікрофоном iPhone. Мовлення та звук дзвінків як і раніше відтворюються через динаміки автомобіля. Застосовується під час наступного підключення CarPlay.</string>
     <string name="phone_audio_route">Телефонний звук автомобіля для дзвінків CarPlay (експериментально)</string>
     <string name="phone_audio_route_description">Утримує виклик Telecom під час дзвінків CarPlay, щоб автомобіль перейшов у телефонний режим звуку й запрацювало його власне ехозаглушення. Ехозаглушувач DiPlay у таких дзвінках не використовується. Ваш голос може звучати гучніше або зі спотвореннями. За замовчуванням вимкнено; діє з наступного дзвінка.</string>
     <string name="phone_audio_route_apps">Телефонний звук автомобіля для VoIP-дзвінків в інших застосунках (експериментально)</string>

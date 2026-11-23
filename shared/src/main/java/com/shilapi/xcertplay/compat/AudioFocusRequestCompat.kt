@@ -17,6 +17,12 @@ class AudioFocusRequestCompat(
     val attributes: AudioAttributes,
     private val listener: AudioManager.OnAudioFocusChangeListener,
     private val handler: Handler,
+    /**
+     * The legacy stream type for the pre-O request path. The Pioneer head unit's audio stack
+     * routes and arbitrates by its private stream types (400+); a track built with one must
+     * request focus on the same type, or the unit denies focus to the mismatched request.
+     */
+    private val focusStreamType: Int? = null,
 ) {
     private val platformRequest: Any? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         AudioFocusRequest.Builder(gain)
@@ -37,7 +43,7 @@ class AudioFocusRequestCompat(
             manager.requestAudioFocus(platformRequest as AudioFocusRequest)
         } else {
             @Suppress("DEPRECATION")
-            manager.requestAudioFocus(legacyListener, legacyStreamType(attributes.usage), gain)
+            manager.requestAudioFocus(legacyListener, focusStreamType ?: legacyStreamType(attributes.usage), gain)
         }
 
     fun abandon(manager: AudioManager): Int =

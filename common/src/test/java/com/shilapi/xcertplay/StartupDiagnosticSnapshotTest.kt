@@ -31,31 +31,15 @@ class StartupDiagnosticSnapshotTest {
         assertTrue(StartupDiagnosticSnapshot.report(app).contains("launchEnabledAtBoot=false launchResult=disabled"))
     }
 
-    @Test fun successfulLaunchMeansAnActivityRequestAndRetainsTheExistingFlags() {
+    @Test fun savedBootFlagDoesNotLaunchDiPlay() {
         AirPlayPersistence.saveAutoStartOnBoot(app, true)
-        var launch: Intent? = null
+        var launched = false
         val context = object : ContextWrapper(app) {
-            override fun startActivity(intent: Intent) { launch = intent }
+            override fun startActivity(intent: Intent) { launched = true }
         }
         BootReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
-        assertEquals(DiPlayActivity::class.java.name, launch!!.component!!.className)
-        assertTrue(launch!!.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
-        assertTrue(StartupDiagnosticSnapshot.report(app).contains("launchResult=startActivity-returned"))
-    }
-
-    @Test fun launchFailureRecordsOnlyItsClassAndASecondBootReplacesOldEvidence() {
-        AirPlayPersistence.saveAutoStartOnBoot(app, true)
-        val context = object : ContextWrapper(app) {
-            override fun startActivity(intent: Intent) { throw SecurityException("Jane's phone token=private-data") }
-        }
-        BootReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
-        val failed = StartupDiagnosticSnapshot.report(app)
-        assertTrue(failed.contains("launchResult=failed failureClass=SecurityException"))
-        assertFalse(failed.contains("Jane")); assertFalse(failed.contains("private-data"))
-        assertNotNull(DiagnosticRedactor.redact(failed))
-        AirPlayPersistence.saveAutoStartOnBoot(app, false)
-        BootReceiver().onReceive(context, Intent(Intent.ACTION_BOOT_COMPLETED))
-        assertTrue(StartupDiagnosticSnapshot.report(app).contains("launchResult=disabled failureClass=none"))
+        assertFalse(launched)
+        assertTrue(StartupDiagnosticSnapshot.report(app).contains("launchEnabledAtBoot=false launchResult=disabled"))
     }
 
     @Test fun unrelatedBroadcastsDoNotCreateOrOverwriteBootEvidence() {

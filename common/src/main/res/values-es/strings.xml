@@ -328,6 +328,8 @@
     <string name="s_1_open_car_hotspot_settings_turn_the_hotspot_on_and_sele">1. Abre los ajustes del punto de acceso del coche, actívalo y selecciona 5 GHz si está disponible.\n2. Copia abajo su nombre y contraseña exactamente.\n3. Deja el punto de acceso del coche activado al conectarte. DiPlay envía los datos por Bluetooth; tu iPhone se une automáticamente.</string>
     <string name="s_2_pair_your_iphone">2 · Empareja tu iPhone</string>
     <string name="s_300_ms_default">300 ms · predeterminado</string>
+    <string name="s_20_fps_lightest_load">20 img/s · carga más ligera</string>
+    <string name="s_25_fps_lighter_load">25 img/s · carga más ligera</string>
     <string name="s_30_fps_lighter_load">30 img/s · carga más ligera</string>
     <string name="s_3_connect">3 · Conéctate</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Toca «Comprobar y activar» abajo. Esto activa el mapa del cuadro y el seguimiento automático del tema. Una sesión de CarPlay activa se reconectará una vez. Después puedes desconectar el ordenador.</string>
@@ -692,6 +694,8 @@
     <string name="call_echo_cancellation_description">Intenta reducir el eco de los altavoces que recibe la otra persona en llamadas de CarPlay. El resultado depende del equipo del coche. Se aplica en la próxima conexión de CarPlay.</string>
     <string name="call_voice_filter">Voces más claras en llamadas (experimental)</string>
     <string name="call_voice_filter_description">Reduce los graves del audio de llamadas de CarPlay. Puede cambiar cómo suenan las voces. Se aplica en la próxima conexión de CarPlay.</string>
+    <string name="phone_own_microphone">Siri escucha con el propio iPhone (experimental)</string>
+    <string name="phone_own_microphone_description">Deja de enviar el micrófono del coche al iPhone, de modo que Siri y las llamadas graban con el micrófono del propio iPhone. La voz y el audio de las llamadas siguen sonando por los altavoces del coche. Se aplica en la próxima conexión de CarPlay.</string>
     <string name="phone_audio_route">Audio telefónico del coche en llamadas de CarPlay (experimental)</string>
     <string name="phone_audio_route_description">Mantiene una llamada de Telecom durante las llamadas de CarPlay para que el coche pase a su estado de audio telefónico y funcione su propia cancelación de eco. El cancelador de eco de DiPlay no actúa en esas llamadas. Tu voz puede sonar más fuerte o distorsionada. Desactivado por defecto; se aplica en la siguiente llamada.</string>
     <string name="phone_audio_route_apps">Audio telefónico del coche en llamadas VoIP de otras apps (experimental)</string>

@@ -11,6 +11,20 @@ import java.io.ByteArrayOutputStream
 object MediaCodecSupport {
     private val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)
 
+    /**
+     * Whether a decoder name is a software one. Android 7 has no software-only flag, and vendor
+     * software decoders (e.g. OMX.Freescale...soft_hevc.sw-based) do not use the OMX.google name,
+     * so the name itself has to say it. Same rule as the host's HevcSupport.
+     */
+    fun isSoftwareDecoderName(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.startsWith("omx.google.") ||
+            lower.startsWith("c2.android.") ||
+            "soft" in lower ||
+            "sw-based" in lower ||
+            "sw_based" in lower
+    }
+
     /** Splits an AVCDecoderConfigurationRecord into raw first SPS and first PPS. */
     fun avcParameterSets(codecData: ByteArray): Pair<ByteArray, ByteArray> {
         if (codecData.size < 7) return emptySet()

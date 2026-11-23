@@ -12,6 +12,12 @@ class CarPlayMediaButtonTest {
     fun steeringWheelKeysMapToCarPlayMediaPresses() {
         assertEquals(CarPlayMediaButton.NEXT, CarPlayMediaButton.forKeyCode(KeyEvent.KEYCODE_MEDIA_NEXT))
         assertEquals(CarPlayMediaButton.PREVIOUS, CarPlayMediaButton.forKeyCode(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertEquals(CarPlayMediaButton.NEXT, CarPlayMediaButton.pioneerWiredSeek(554))
+        assertEquals(CarPlayMediaButton.PREVIOUS, CarPlayMediaButton.pioneerWiredSeek(555))
+        assertEquals(CarPlayMediaButton.NEXT, CarPlayMediaButton.pioneerWiredSeek(0, scanCode = 1, deviceId = 0))
+        assertEquals(CarPlayMediaButton.PREVIOUS, CarPlayMediaButton.pioneerWiredSeek(0, scanCode = 2, deviceId = 0))
+        assertNull(CarPlayMediaButton.pioneerWiredSeek(0, scanCode = 1, deviceId = 3))
+        assertNull(CarPlayMediaButton.pioneerWiredSeek(KeyEvent.KEYCODE_MEDIA_NEXT))
         // BYD rewrites its play/pause key into PLAY or PAUSE from the session state; both toggle.
         assertEquals(CarPlayMediaButton.PLAY_PAUSE, CarPlayMediaButton.forKeyCode(KeyEvent.KEYCODE_MEDIA_PLAY))
         assertEquals(CarPlayMediaButton.PLAY_PAUSE, CarPlayMediaButton.forKeyCode(KeyEvent.KEYCODE_MEDIA_PAUSE))
@@ -48,6 +54,18 @@ class CarPlayMediaButtonTest {
         assertTrue(CarPlayMediaButton.opensSiri(312))
         assertTrue(CarPlayMediaButton.opensSiri(KeyEvent.KEYCODE_VOICE_ASSIST))
         assertFalse(CarPlayMediaButton.opensSiri(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertTrue(CarPlayMediaButton.isPioneerWiredVoice(570))
+        assertTrue(CarPlayMediaButton.isPioneerWiredVoice(0, 0x06, 0))
+        assertTrue(CarPlayMediaButton.isPioneerWiredVoice(0, 0x0119, 0))
+        assertFalse(CarPlayMediaButton.isPioneerWiredVoice(0, 0x06, 3))
+        assertTrue(CarPlayMediaButton.isPioneerMode(307))
+        assertTrue(CarPlayMediaButton.isPioneerMode(567))
+        assertTrue(CarPlayMediaButton.isPioneerModeKey(0, 0x16, 0))
+        assertTrue(CarPlayMediaButton.isPioneerModeKey(0, 0x05, 0))
+        assertFalse(CarPlayMediaButton.isPioneerModeKey(0, 0x16, 3))
+        assertFalse(CarPlayMediaButton.isPioneerMode(570))
+        assertFalse(CarPlayMediaButton.isPioneerWiredVoice(KeyEvent.KEYCODE_VOICE_ASSIST))
+        assertFalse(CarPlayMediaButton.opensSiri(570))
         assertNull(CarPlayMediaButton.forKeyCode(304))
     }
 
@@ -72,8 +90,12 @@ class CarPlayMediaButtonTest {
 
         assertEquals(CarPlayMediaButton.NEXT, claim(KeyEvent.KEYCODE_MEDIA_NEXT))
         assertEquals(CarPlayMediaButton.PREVIOUS, claim(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertEquals(CarPlayMediaButton.NEXT, claim(CarPlayMediaButton.KEYCODE_PIONEER_WIRED_SEEK_UP))
+        assertEquals(CarPlayMediaButton.PREVIOUS, claim(CarPlayMediaButton.KEYCODE_PIONEER_WIRED_SEEK_DOWN))
         // Without a session, or during a call, the wheel keeps the car's own action.
         assertNull(claim(KeyEvent.KEYCODE_MEDIA_NEXT, sessionActive = false))
+        assertNull(claim(CarPlayMediaButton.KEYCODE_PIONEER_WIRED_SEEK_UP, sessionActive = false))
+        assertNull(claim(CarPlayMediaButton.KEYCODE_PIONEER_WIRED_SEEK_DOWN, inCall = true))
         assertNull(claim(KeyEvent.KEYCODE_MEDIA_PREVIOUS, sessionActive = false))
         assertNull(claim(KeyEvent.KEYCODE_MEDIA_NEXT, inCall = true))
         assertNull(claim(KeyEvent.KEYCODE_MEDIA_PREVIOUS, inCall = true))
@@ -88,5 +110,27 @@ class CarPlayMediaButtonTest {
             KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_VOLUME_UP)) {
             assertNull("keyCode=$keyCode", CarPlayMediaButton.forCarPlayWindow(keyCode, true, false))
         }
+    }
+
+    @Test
+    fun pioneerWindowsAlsoClaimPlayPause() {
+        fun claim(keyCode: Int, claimPlayPause: Boolean = true, sessionActive: Boolean = true,
+            inCall: Boolean = false) =
+            CarPlayMediaButton.forCarPlayWindow(keyCode, sessionActive, inCall, claimPlayPause)
+
+        assertEquals(CarPlayMediaButton.PLAY_PAUSE, claim(KeyEvent.KEYCODE_MEDIA_PLAY))
+        assertEquals(CarPlayMediaButton.PLAY_PAUSE, claim(KeyEvent.KEYCODE_MEDIA_PAUSE))
+        assertEquals(CarPlayMediaButton.PLAY_PAUSE, claim(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+        assertEquals(CarPlayMediaButton.PLAY_PAUSE, claim(KeyEvent.KEYCODE_HEADSETHOOK))
+        // Track keys keep working, and the same guards apply to the toggle.
+        assertEquals(CarPlayMediaButton.NEXT, claim(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertEquals(CarPlayMediaButton.PREVIOUS, claim(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertNull(claim(KeyEvent.KEYCODE_MEDIA_PLAY, sessionActive = false))
+        assertNull(claim(KeyEvent.KEYCODE_MEDIA_PLAY, inCall = true))
+        // Stop, volume and BYD's own codes stay with the car even where the toggle is claimed.
+        assertNull(claim(KeyEvent.KEYCODE_MEDIA_STOP))
+        assertNull(claim(KeyEvent.KEYCODE_VOLUME_UP))
+        assertNull(claim(353))
+        assertNull(claim(331))
     }
 }

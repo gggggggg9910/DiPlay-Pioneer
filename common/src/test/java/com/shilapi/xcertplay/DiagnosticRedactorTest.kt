@@ -38,6 +38,9 @@ class DiagnosticRedactorTest {
     @Test fun boundedMicrophoneStartFailureAndCaptureCountersSurviveRedaction() {
         val lines = listOf(
             "Microphone: start type=telephony source=VOICE_COMMUNICATION codec=OPUS rate=48000 channels=1 frameMs=20 routedDeviceType=15",
+            "Microphone: available inputs id=9/type=15, id=11/type=11",
+            "Microphone: preferred input id=9 type=15 accepted=true",
+            "Microphone: uplink path=userspace loopbackPeer=true phoneKnown=true frameBytes=960 rtpStep=480",
             "Microphone: failure type=speechrecognition source=VOICE_RECOGNITION codec=LPCM rate=16000 channels=1 frameMs=20 stage=READ error=none code=-3",
             "Microphone: stats type=telephony source=VOICE_COMMUNICATION codec=OPUS rate=48000 channels=1 frameMs=20 routedDeviceType=15 captureBytes=1920 reads=2 zeroReads=1 readErrors=0 readMaxMs=30 encodedFrames=1 emptyEncodedFrames=1 udpSent=2 sendErrors=1 sendGapMaxMs=30 ended=false",
         )

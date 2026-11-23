@@ -19,8 +19,22 @@ internal object HevcSupport {
         MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
             !info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true) }
         }.map { info ->
-            Decoder(info.name, if (Build.VERSION.SDK_INT >= 29) info.isHardwareAccelerated
-                else !info.name.startsWith("OMX.google.") && !info.name.startsWith("c2.android."))
+            val platformHardware = if (Build.VERSION.SDK_INT >= 29) info.isHardwareAccelerated else true
+            Decoder(info.name, platformHardware && !isSoftwareDecoderName(info.name))
         }
     }.getOrDefault(emptyList())
+
+    /**
+     * Android 7 has no hardware-accelerated flag. Vendor software decoders such as
+     * OMX.Freescale.std.video_decoder.soft_hevc.sw-based do not use the OMX.google name, so the
+     * name itself has to say the decoder is software.
+     */
+    fun isSoftwareDecoderName(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.startsWith("omx.google.") ||
+            lower.startsWith("c2.android.") ||
+            "soft" in lower ||
+            "sw-based" in lower ||
+            "sw_based" in lower
+    }
 }

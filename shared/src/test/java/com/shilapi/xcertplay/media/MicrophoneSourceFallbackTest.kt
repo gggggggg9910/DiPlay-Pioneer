@@ -5,6 +5,7 @@ import android.media.AudioManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioDeviceInfo
 import android.media.MediaRecorder
 import com.shilapi.xcertplay.airplay.AudioStreamId
 import com.shilapi.xcertplay.airplay.MicrophoneConfig
@@ -28,6 +29,7 @@ import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowAudioEffect
 import org.robolectric.shadows.ShadowAudioRecord
+import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.util.ReflectionHelpers
 
 /** Exercises the real sink/uplink, including creation, teardown and exported diagnostics. */
@@ -46,6 +48,7 @@ class MicrophoneSourceFallbackTest {
         RecorderBuilder.built.clear()
         RecorderBuilder.rejectSources = emptySet()
         RecorderBuilder.uninitializedSources = emptySet()
+        RecorderBuilder.trackPreference = false
         shadowOf(context).grantPermissions(Manifest.permission.RECORD_AUDIO, Manifest.permission.MODIFY_AUDIO_SETTINGS)
         ShadowAudioModeRequests.clearRequests()
         ShadowAudioModeRequests.otherProcess(AudioManager.MODE_RINGTONE)
@@ -120,6 +123,30 @@ class MicrophoneSourceFallbackTest {
         assertTrue(ShadowAudioEffect.getAudioEffects().isEmpty())
     }
 
+    @Test fun preferredCarMicrophoneIsSelectedBeforeRecordingStarts() {
+        RecorderBuilder.trackPreference = true
+        val carMic = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_MIC).build()
+        // The builder leaves the port name null, which API 28's getProductName cannot read.
+        ReflectionHelpers.setField(ReflectionHelpers.getField<Any>(carMic, "mPort"), "mName", "Built-In Mic")
+        val uplink = MicrophoneUplink(config("speechrecognition"), diagnostics::add,
+            preferredInputDevice = { carMic })
+        try {
+            assertTrue(uplink.start())
+            val record = RecorderBuilder.built.single() as PreferenceRecorder
+            assertSame(carMic, record.selectedAtStart)
+            assertTrue(diagnostics.joinToString("\n"), diagnostics.any { it.contains("preferred input") && it.contains("accepted=true") })
+        } finally { uplink.close() }
+    }
+
+    @Test fun absentPreferredMicrophoneKeepsRecordingAvailableAndReportsIt() {
+        val uplink = MicrophoneUplink(config("speechrecognition"), diagnostics::add,
+            preferredInputDevice = { null })
+        try {
+            assertTrue(uplink.start())
+            assertTrue(diagnostics.any { it.contains("preferred input id=null") })
+        } finally { uplink.close() }
+    }
+
     private fun config(type: String) = MicrophoneConfig(audioType = type, sampleRate = 16_000,
         channels = 1, payloadType = 100, frameMillis = 20, host = InetAddress.getLoopbackAddress(),
         port = 9, key = ByteArray(32))
@@ -134,6 +161,7 @@ class MicrophoneSourceFallbackTest {
             attempts += source
             if (source in rejectSources) throw UnsupportedOperationException("Unsupported test capture source")
             return (if (source in uninitializedSources) RejectedRecorder(source)
+                else if (trackPreference) PreferenceRecorder(source)
                 else Shadow.directlyOn<AudioRecord, AudioRecord.Builder>(builder, AudioRecord.Builder::class.java, "build")).also {
                 built += it
             }
@@ -144,6 +172,21 @@ class MicrophoneSourceFallbackTest {
             val built = CopyOnWriteArrayList<AudioRecord>()
             var rejectSources = emptySet<Int>()
             var uninitializedSources = emptySet<Int>()
+            var trackPreference = false
+        }
+    }
+
+    class PreferenceRecorder(source: Int) : AudioRecord(source, 16_000,
+        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, 4096) {
+        private var selected: AudioDeviceInfo? = null
+        var selectedAtStart: AudioDeviceInfo? = null
+        override fun setPreferredDevice(device: AudioDeviceInfo?): Boolean {
+            selected = device
+            return true
+        }
+        override fun startRecording() {
+            selectedAtStart = selected
+            super.startRecording()
         }
     }
 

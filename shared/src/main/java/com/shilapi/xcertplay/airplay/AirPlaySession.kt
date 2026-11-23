@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.airplay
 
 import android.util.Log
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
+import com.shilapi.xcertplay.network.UserspaceLink
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -113,6 +114,7 @@ class AirPlaySession(
     private var keepAliveSocket: DatagramSocket? = null
     private var keepAliveThread: Thread? = null
     private val eventWriteLock = Any()
+    private val eventWriteStats = EventWriteStats()
     private val eventThreads = CopyOnWriteArrayList<Thread>()
 
     val host: String = socket.inetAddress?.hostAddress ?: ""
@@ -154,6 +156,7 @@ class AirPlaySession(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         mainScreenToken = null
+        com.shilapi.xcertplay.media.TouchLatencyProbe.reset()
         clearClusterContent()
         safeClose(socket)
         try {
@@ -299,8 +302,11 @@ class AirPlaySession(
     fun showViewArea(index: Int): Boolean =
         sendCommand(AirPlayInfoPlist.viewAreaCommand(index, config.main.viewAreas?.size ?: 1))
 
-    fun sendCommand(command: Map<String, Any?>): Boolean = synchronized(eventWriteLock) {
-        sendCommandLocked(command)
+    fun sendCommand(command: Map<String, Any?>): Boolean {
+        val waitingAt = System.nanoTime()
+        return synchronized(eventWriteLock) {
+            sendCommandLocked(command, waitNs = System.nanoTime() - waitingAt)
+        }
     }
 
     /**
@@ -321,21 +327,27 @@ class AirPlaySession(
     internal fun setVideoPlaybackAllowed(allowed: Boolean): VideoPlaybackDelivery =
         videoPlaybackAvailability.setDesired(allowed)
 
-    private fun sendCommandLocked(command: Map<String, Any?>, extraHeaders: String = ""): Boolean {
+    private fun sendCommandLocked(command: Map<String, Any?>, extraHeaders: String = "", waitNs: Long = 0L): Boolean {
         val socket = eventSocket ?: return false
         val cipher = eventCipher ?: return false
         eventCseq++
+        val encodeAt = System.nanoTime()
         val body = BplistCodec.encode(command)
         val head = "POST /command RTSP/1.0\r\n" + extraHeaders +
             "Content-Type: $PLIST_CONTENT_TYPE\r\n" +
             "Content-Length: ${body.size}\r\n" +
             "CSeq: $eventCseq\r\n\r\n"
-        trace { "airplay event tx headers=$head bodyHex=${body.toHex()}" }
+        // No payload formatting on the HID path: the public diagnostic sink rejects TRACE anyway.
+        val plain = head.toByteArray(Charsets.US_ASCII) + body
+        val cryptoAt = System.nanoTime()
         return try {
-            val bytes = cipher.encrypt(head.toByteArray(Charsets.US_ASCII) + body)
+            val bytes = cipher.encrypt(plain)
+            val writeAt = System.nanoTime()
             val output = socket.getOutputStream()
             output.write(bytes)
             output.flush()
+            eventWriteStats.record(waitNs, cryptoAt - encodeAt, writeAt - cryptoAt,
+                System.nanoTime() - writeAt)?.let { debugLog(it) }
             true
         } catch (error: Exception) {
             Log.w(TAG, "airplay event command failed type=${command["type"]}", error)
@@ -492,10 +504,7 @@ class AirPlaySession(
                         AirPlayControlDiagnostics.request(request.method, request.path, request.body.size),
                         false,
                     )
-                    trace {
-                        "airplay control rx headers=${request.headers} " +
-                            "bodyHex=${request.body.toHex()}"
-                    }
+
                     val response = try {
                         handle(request)
                     } catch (error: Exception) {
@@ -515,7 +524,7 @@ class AirPlaySession(
                         false,
                     )
                     val wire = RtspMessage.buildResponse(request, response)
-                    trace { "airplay control tx wireHex=${wire.toHex()}" }
+
                     output.write(cipher?.encrypt(wire) ?: wire)
                     if (cipher == null && pairVerify.controlKeys != null) {
                         val keys = pairVerify.controlKeys!!
@@ -665,7 +674,7 @@ class AirPlaySession(
             val responseStreams = handleStreams(streams)
             debugLog("airplay SETUP response streams=$responseStreams")
             val body = BplistCodec.encode(linkedMapOf("streams" to responseStreams))
-            trace { "airplay SETUP response bplistHex=${body.toHex()}" }
+
             return RtspMessage.Response(headers = mapOf("Content-Type" to PLIST_CONTENT_TYPE), body = body)
         }
 
@@ -764,7 +773,6 @@ class AirPlaySession(
         }
         val type = string(body["type"])
         val params = asMap(body["params"]) ?: emptyMap()
-        debugLog("airplay command type=$type keys=${params.keys.sorted()}")
         val streamId = request.headers["x-apple-streamid"]?.toLongOrNull()
         val data = params["data"] as? ByteArray
         if (streamId != null && data != null) {
@@ -797,7 +805,7 @@ class AirPlaySession(
             "airplay TEARDOWN types=${types ?: "all"} activeBefore=$activeStreams " +
                 "body=${request.body.size} bytes payload=$decodedBody",
         )
-        trace { "airplay TEARDOWN raw${request.body.size}Hex=${request.body.toHex()}" }
+
 
         // Restore wheel input before releasing media resources, which may take time to close.
         if (types == null || STREAM_TYPE_MAIN_SCREEN in types) mainScreenToken = null
@@ -819,7 +827,14 @@ class AirPlaySession(
 
     private fun openTiming(peerPort: Int): Int {
         val port = ntp.listen()
-        if (peerPort > 0) peerAddress?.let { ntp.start(it, peerPort) }
+        // The userspace USB stack terminates the phone on lwIP; clock packets must go back to the
+        // phone's timing port through that stack, not to the splice loopback the sockets show.
+        val peer = when {
+            UserspaceLink.isActive() && (peerAddress == null || peerAddress.isLoopbackAddress) ->
+                UserspaceLink.phone ?: peerAddress
+            else -> peerAddress
+        }
+        if (peerPort > 0) peer?.let { ntp.start(it, peerPort) }
         return port
     }
 
@@ -849,6 +864,7 @@ class AirPlaySession(
     private fun openEvent(): Int {
         val server = ServerSocket(0, 50, InetAddress.getByName("::"))
         eventServer = server
+        com.shilapi.xcertplay.network.UserspaceLink.useSmallReceiveBuffer(server.localPort)
         spawnEvent("airplay-event-accept") { acceptEvent(server) }
         return server.localPort
     }
@@ -861,6 +877,9 @@ class AirPlaySession(
         keepAliveSocket = null
         keepAliveThread?.interrupt()
         keepAliveThread = null
+        eventServer?.localPort?.let {
+            com.shilapi.xcertplay.network.UserspaceLink.clearSmallReceiveBuffer(it)
+        }
         safeClose(eventServer)
         eventServer = null
         safeClose(eventSocket)
@@ -872,13 +891,20 @@ class AirPlaySession(
 
     private fun acceptEvent(server: ServerSocket) {
         try {
+            // Both transports accept from the control socket's own remote: the phone's address on
+            // kernel NCM, or the userspace stack's loopback splice — never UserspaceLink.phone,
+            // which names where to send, not where the splice's accepts come from.
             val expected = peerAddress ?: throw IOException("control peer unknown")
             val socket = server.acceptFrom(expected) { debugLog("airplay event rejected sender outside the control session") }
             socket.setSoLinger(true, 0)
             // Avoid Nagle coalescing on this interactive event connection: small HID/event writes
             // need not wait for earlier unacknowledged data.
             socket.tcpNoDelay = true
-            debugLog("airplay event connection accepted from ${socket.remoteSocketAddress} noDelay=${socket.tcpNoDelay}")
+            socket.sendBufferSize = com.shilapi.xcertplay.network.UserspaceLink.SMALL_RECEIVE_BUFFER_BYTES
+            debugLog(
+                "airplay event connection accepted from ${socket.remoteSocketAddress} " +
+                    "noDelay=${socket.tcpNoDelay} sndBuf=${socket.sendBufferSize}",
+            )
             eventSocket = socket
             val shared = pairVerify.shared
             if (shared == null) {
@@ -943,11 +969,7 @@ class AirPlaySession(
                         "airplay event rx ${message.method} ${message.path} cseq=${message.headers["cseq"] ?: "-"} body=${message.body.size}",
                     )
                     val response = RtspMessage.buildResponse(message, RtspMessage.Response(status = 200))
-                    trace {
-                        "airplay event rx headers=${message.headers} " +
-                            "bodyHex=${message.body.toHex()}"
-                    }
-                    trace { "airplay event tx wireHex=${response.toHex()}" }
+
                     synchronized(eventWriteLock) {
                         output.write(cipher.encrypt(response))
                         output.flush()
@@ -1052,8 +1074,16 @@ internal fun safeClose(closeable: Closeable?) {
     }
 }
 
-private fun ByteArray.toHex(): String =
-    joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+private fun ByteArray.toHex(): String {
+    val digits = "0123456789abcdef"
+    return String(CharArray(size * 2).also { chars ->
+        for (index in indices) {
+            val value = this[index].toInt() and 255
+            chars[index * 2] = digits[value ushr 4]
+            chars[index * 2 + 1] = digits[value and 15]
+        }
+    })
+}
 
 private fun asMap(value: Any?): Map<String, Any?>? {
     val map = value as? Map<*, *> ?: return null

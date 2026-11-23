@@ -98,6 +98,9 @@ import com.shilapi.xcertplay.location.AndroidCarPlayLocationProvider
 import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.media.CarPlayTouchMapper
 import com.shilapi.xcertplay.media.CarPlayVideoLayout
+import com.shilapi.xcertplay.media.VideoDecoderEngine
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
+import com.shilapi.xcertplay.media.PioneerHeadUnit
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import com.shilapi.xcertplay.orchestration.CarPlayRuntimeConfig
@@ -399,9 +402,17 @@ open class CarPlayHostActivity : ComponentActivity() {
         }
     }
     // Smooth video (a setting): SurfaceView output with frames released at the iPhone's frame time.
-    private var smoothVideo = false
     // Direct video output (a setting): SurfaceView output with frames shown as soon as they are decoded.
+    private var smoothVideo = false
     private var directVideoOutput = false
+    private val fixedRangeDecoder: Boolean by lazy {
+        runCatching {
+            val decoders = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { !it.isEncoder }
+                .map { VideoDecoderInfo(it.name, it.supportedTypes.toList()) }
+            fixedRangeVideoDecoder(decoders)
+        }.getOrDefault(false)
+    }
     // Diagnostics setting: a game-style FPS counter over the picture.
     private var fpsCounter: FpsCounterOverlay? = null
     // Sinks whose sessions are being torn down; their decoders may still render to the current surface
@@ -522,8 +533,10 @@ open class CarPlayHostActivity : ComponentActivity() {
     private var displayScaleTenths = CarPlayDisplayScale.DEFAULT_TENTHS
     private var uiScalePercent = CarPlayUiScale.DEFAULT
     private var displayDiagnosticAttempt: String? = null
-    private var hevcEnabled = true
+    private var hevcEnabled = false
     private var hevcSoftwareDecoderEnabled = false
+    private var videoDecoderEngine = VideoDecoderEngine.PLATFORM
+    private var enforcedAudioChannel = EnforcedAudioChannel.NORMAL
     private val hevcDecoders by lazy { HevcSupport.decoders() }
     /** The codec a session asks for: the HEVC setting falls back to H.264 without a decoder for it (#727). */
     private val sessionHevc: Boolean
@@ -532,7 +545,6 @@ open class CarPlayHostActivity : ComponentActivity() {
     private var advancedAudioChannelMapping = false
     private var navigationStreamType = 14
     private var debugLogsEnabled = false
-    private var autoStartOnBoot = false
     private var manufacturer = AirPlayPersistence.DEFAULT_MANUFACTURER
     private var model = AirPlayPersistence.DEFAULT_MODEL
     private var oemLabel = AirPlayPersistence.DEFAULT_OEM_LABEL
@@ -945,12 +957,13 @@ open class CarPlayHostActivity : ComponentActivity() {
         hevcSoftwareDecoderEnabled =
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 AirPlayPersistence.loadHevcSoftwareDecoderEnabled(this)
+        videoDecoderEngine = AirPlayPersistence.loadVideoDecoderEngine(this)
+        enforcedAudioChannel = AirPlayPersistence.loadEnforcedAudioChannel(this)
         advancedAudioChannelMapping =
             advancedAudioChannelMappingSupported &&
                 AirPlayPersistence.loadAdvancedAudioChannelMapping(this)
         navigationStreamType = AirPlayPersistence.loadNavigationStreamType(this)
         debugLogsEnabled = AirPlayPersistence.loadDebugLogsEnabled(this)
-        autoStartOnBoot = AirPlayPersistence.loadAutoStartOnBoot(this)
         manufacturer = AirPlayPersistence.loadManufacturer(this)
         model = AirPlayPersistence.loadModel(this)
         oemLabel = AirPlayPersistence.loadOemLabel(this)
@@ -1010,7 +1023,14 @@ open class CarPlayHostActivity : ComponentActivity() {
         if (wirelessEnabled) {
             requestWirelessPermissions()
         } else if (!requestWiredPermissions()) {
-            requestVpnConsent()
+            // Userspace wired transport never calls VpnService.establish, so the system consent
+            // screen is not required. This firmware has no such screen and only shows an error.
+            if (wiredTransportNeedsVpn()) {
+                requestVpnConsent()
+            } else {
+                vpnReady = true
+                maybeStartCarPlay()
+            }
         }
     }
 
@@ -1044,6 +1064,13 @@ open class CarPlayHostActivity : ComponentActivity() {
     private fun hasFineLocationPermission(): Boolean =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
+
+    /** Kernel tun mode is the only wired path that still opens a VPN. The marker must say "kernel". */
+    private fun wiredTransportNeedsVpn(): Boolean {
+        val directory = getExternalFilesDir(null) ?: return false
+        val marker = runCatching { java.io.File(directory, "diplay_transport.txt").readText() }.getOrNull()
+        return marker?.contains("kernel", ignoreCase = true) == true
+    }
 
     private fun requestVpnConsent() {
         if (awaitingVpnConsent) return
@@ -1802,13 +1829,47 @@ open class CarPlayHostActivity : ComponentActivity() {
         if (assignedAction != WheelZoomKeys.Action.PASS) return true
         if (downOrUp && assignedKey) return super.dispatchKeyEvent(event)
 
+        // The Camry voice key is 570, not Android's voice-assist key. Claim it here when this window
+        // is in front; the wheel key service claims it when another screen has focus.
+        if (downOrUp && CarPlayMediaButton.isPioneerModeKey(event.keyCode, event.scanCode, event.deviceId) &&
+            activeAirPlaySession != null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                val shown = OwnScreenStart.bringCarPlayToFront(this)
+                appendLog("Pioneer mode ${event.keyCode}/${event.scanCode} -> CarPlay in front shown=$shown")
+            }
+            return true
+        }
+        if (downOrUp &&
+            CarPlayMediaButton.isPioneerWiredVoice(event.keyCode, event.scanCode, event.deviceId) &&
+            activeAirPlaySession != null &&
+            com.shilapi.xcertplay.hud.BydNavigationOutputs.carPlayCall() == null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                val sent = controller?.requestSiri() == true
+                val shown = OwnScreenStart.bringCarPlayToFront(this)
+                appendLog("Siri: Pioneer voice ${event.keyCode}/${event.scanCode} sent=$sent shown=$shown")
+            }
+            return true
+        }
+
+        val pioneerSeek = CarPlayMediaButton.pioneerWiredSeek(event.keyCode, event.scanCode, event.deviceId)
+        if (downOrUp && pioneerSeek != null && activeAirPlaySession != null &&
+            com.shilapi.xcertplay.hud.BydNavigationOutputs.carPlayCall() == null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                val sent = controller?.sendMediaButton(pioneerSeek) == true
+                appendLog("Media: Pioneer seek ${event.keyCode}/${event.scanCode} -> CarPlay $pioneerSeek sent=$sent")
+            }
+            return true
+        }
+
         // Steering-wheel next/previous, claimed by the CarPlay screen itself. BYD gives these keys to
         // whichever window is in front, and this is the only route that reaches CarPlay without the
-        // wheel key service — which a head unit with no ADB cannot turn on at all.
+        // wheel key service — which a head unit with no ADB cannot turn on at all. The Pioneer panel
+        // delivers play/pause the same way, so there the toggle is claimed too.
         val mediaPress = CarPlayMediaButton.forCarPlayWindow(
             event.keyCode,
             sessionActive = activeAirPlaySession != null,
             inCall = inCall(this),
+            claimPlayPause = PioneerHeadUnit.present(this),
         )
         if (downOrUp && mediaPress != null) {
             // A media button is a tap, and BYD sends each tap as an instant down/up pair: send once,
@@ -1819,6 +1880,14 @@ open class CarPlayHostActivity : ComponentActivity() {
                 appendLog("Media: wheel key ${event.keyCode} -> CarPlay $mediaPress sent=$sent")
             }
             return true
+        }
+        // A media key that reached this window but was not claimed above (stop, fast-forward, or a
+        // play/pause on a unit that keeps it): name it in the log, so the panel's real key codes are
+        // on record the first time a new head unit is driven.
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && activeAirPlaySession != null &&
+            event.keyCode in PANEL_MEDIA_LOG_KEYS && mediaPress == null
+        ) {
+            appendLog("Media: panel key ${event.keyCode}/${event.scanCode} dev=${event.deviceId} not claimed")
         }
 
         // Keep DiPlay's existing steering-wheel/voice-key Siri handling intact.
@@ -3011,28 +3080,6 @@ open class CarPlayHostActivity : ComponentActivity() {
             ).apply { topMargin = dp(6) },
         )
 
-        content.addView(
-            settingsCategoryHeader(getString(R.string.automatic_connection)),
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(36) },
-        )
-        content.addView(
-            settingsSwitchRow(
-                label = getString(R.string.auto_start_on_boot),
-                checked = autoStartOnBoot,
-                description = getString(R.string.start_carplay_automatically_after_device_boot),
-            ) { checked ->
-                autoStartOnBoot = checked
-                appendLog("Boot auto-start ${if (checked) "enabled" else "disabled"}")
-            },
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(12) },
-        )
-
         content = pageFor("navigation")
         content.addView(
             buildLocationReportingSection(),
@@ -3222,6 +3269,30 @@ open class CarPlayHostActivity : ComponentActivity() {
                 ).apply { topMargin = dp(16) },
             )
         }
+
+        val decoderEngineRow = settingsChoiceRow(
+            label = "Video decoder",
+            options = listOf(
+                VideoDecoderEngine.PLATFORM to "Hardware (default)",
+                VideoDecoderEngine.PLATFORM_SOFTWARE to "Android software",
+                VideoDecoderEngine.FFMPEG to "FFmpeg software (multithread)",
+            ),
+            selected = videoDecoderEngine,
+        ) { engine ->
+            if (videoDecoderEngine == engine) return@settingsChoiceRow
+            videoDecoderEngine = engine
+            appendLog(
+                "Video decoder ${engine.name}; " +
+                    "applies when settings close",
+            )
+        }
+        pageFor("advanced").addView(
+            decoderEngineRow,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(30) },
+        )
 
         content.addView(
             buildSafeAreaSection(),
@@ -3536,7 +3607,6 @@ open class CarPlayHostActivity : ComponentActivity() {
         AirPlayPersistence.saveManualHotspotSecurity(this, manualHotspotSecurity)
         AirPlayPersistence.saveManualHotspotInterface(this, manualHotspotInterface)
         AirPlayPersistence.saveLocationReportingEnabled(this, locationReportingEnabled)
-        AirPlayPersistence.saveAutoStartOnBoot(this, autoStartOnBoot)
         AirPlayPersistence.saveAdvancedAudioChannelMapping(this, advancedAudioChannelMapping)
         AirPlayPersistence.saveDisplayScaleTenths(this, displayScaleTenths)
         AirPlayPersistence.saveDisplayScalePercent(this, displayScalePercent)
@@ -3545,6 +3615,7 @@ open class CarPlayHostActivity : ComponentActivity() {
         AirPlayPersistence.savePhysicalSizeBasis(this, physicalSizeBasis)
         AirPlayPersistence.saveHevcEnabled(this, hevcEnabled)
         AirPlayPersistence.saveHevcSoftwareDecoderEnabled(this, hevcSoftwareDecoderEnabled)
+        AirPlayPersistence.saveVideoDecoderEngine(this, videoDecoderEngine)
         AirPlayPersistence.saveManufacturer(this, manufacturer)
         AirPlayPersistence.saveModel(this, model)
         AirPlayPersistence.saveOemLabel(this, oemLabel)
@@ -3587,7 +3658,7 @@ open class CarPlayHostActivity : ComponentActivity() {
         wirelessHotspotMode, existingWifiSsid, existingWifiPassphrase, existingWifiInterface,
         manualHotspotSsid,
         manualHotspotPassphrase, manualHotspotBand, manualHotspotChannel, manualHotspotSecurity,
-        locationReportingEnabled, autoStartOnBoot, advancedAudioChannelMapping, displayScaleTenths,
+        locationReportingEnabled, advancedAudioChannelMapping, displayScaleTenths,
         displayScalePercent, fps, widthPhysicalMm, physicalSizeBasis, hevcEnabled,
         hevcSoftwareDecoderEnabled, manufacturer, model, oemLabel, debugLogsEnabled, rightHandDrive,
         carPlayDock, hideTopBar, hideBottomBar, temporarySystemBarsEnabled,
@@ -5073,7 +5144,8 @@ open class CarPlayHostActivity : ComponentActivity() {
             "surface=${size.width}x${size.height} resolution=${requestedResolutionPercent}% " +
             "base=${requestedResolutionDisplay.widthPixels}x${requestedResolutionDisplay.heightPixels} " +
             "candidate=${candidate.widthPixels}x${candidate.heightPixels} fps=$fps " +
-            "codec=${if (sessionHevc) "HEVC" else "H.264"} softwareHevc=$hevcSoftwareDecoderEnabled"
+            "codec=${if (sessionHevc) "HEVC" else "H.264"} softwareHevc=$hevcSoftwareDecoderEnabled " +
+                "decoder=${videoDecoderEngine.name}"
         val effectiveSummary = "Display effective percent=$uiScalePercent resolution=${displayScalePercent}% " +
             "canvas=${display.widthPixels}x${display.heightPixels} decision=${support.reason} " +
             "physical=${physical.widthMm}x${physical.heightMm}mm safeArea=${display.safeArea} " +
@@ -5097,7 +5169,9 @@ open class CarPlayHostActivity : ComponentActivity() {
             cluster = clusterDisplayConfig(),
             rightHandDrive = rightHandDrive,
             hevc = sessionHevc,
-            microphone = microphoneAvailable,
+            // Self-pickup also withdraws the capability: once the accessory says it has no
+            // microphone, iOS has to keep voice input on the iPhone itself.
+            microphone = microphoneAvailable && !AirPlayPersistence.loadPhoneOwnMicrophone(this),
             microphoneOpus = com.shilapi.xcertplay.media.OpusEncoderSupport.isAvailable(),
             manufacturer = normalizedManufacturer(),
             model = normalizedModel(),
@@ -5303,6 +5377,8 @@ open class CarPlayHostActivity : ComponentActivity() {
             videoWidth = videoWidth,
             videoHeight = videoHeight,
             preferSoftwareHevcDecoder = hevcSoftwareDecoderEnabled,
+            videoDecoderEngine = videoDecoderEngine,
+            enforcedAudioChannel = enforcedAudioChannel,
             advancedAudioChannelMapping = advancedAudioChannelMapping,
             audioFocusEnabled = AirPlayPersistence.loadAudioFocusEnabled(this),
             audioFocusAutoYield = AirPlayPersistence.loadAudioFocusAutoYield(this),
@@ -5316,18 +5392,16 @@ open class CarPlayHostActivity : ComponentActivity() {
             },
             mediaBufferMillis = AirPlayPersistence.loadMediaBufferMillis(this, wireless = wirelessEnabled),
             onAudioDiagnostic = { message ->
-                if (message.startsWith("Microphone: ")) {
-                    AsyncDiagnosticLog.append(diagnosticLog, message)
-                } else {
-                    diagnosticLog?.append(formattedLogLine(message, System.currentTimeMillis()))
-                }
+                // Includes ordinary audio stats and failures, not only microphone messages.
+                AsyncDiagnosticLog.append(diagnosticLog, message)
             },
             onMediaAudioChanged = CarPlayMediaKeys::onMediaAudioChanged,
             callEchoCancellation = AirPlayPersistence.loadCallEchoCancellation(this),
             callVoiceFilter = AirPlayPersistence.loadCallVoiceFilter(this),
             callSpeakerphone = { AirPlayPersistence.loadCallSpeakerphone(this) },
-            // Only a SurfaceView honours release timestamps; smooth video always selects one.
-            videoPacingDelayMillis = if (smoothVideo) smoothVideoDelayMillis(fps) else 0,
+            // i.MX6 ignores frame timestamps' benefit and holds each frame ~200 ms in smooth video,
+            // which is the lag in the stats (delay=200ms, late frames). Show frames as they decode.
+            videoPacingDelayMillis = if (smoothVideo && !fixedRangeDecoder) smoothVideoDelayMillis(fps) else 0,
             mainVideoFrameRate = fps,
             vendorLowLatencyDecoder = AirPlayPersistence.loadLowLatencyDecoder(this),
             mtkDecoderTuningEnabled = AirPlayPersistence.loadMtkDecoderTuning(this),
@@ -5335,12 +5409,20 @@ open class CarPlayHostActivity : ComponentActivity() {
         )
     }
 
-    private fun createMediaEngine(sink: AndroidMediaSink): CarPlayMediaEngine =
-        CarPlayMediaEngine(
+    private fun createMediaEngine(sink: AndroidMediaSink): CarPlayMediaEngine {
+        // iPhone self-pickup: keep advertising the microphone and answering SETUP as before, but
+        // never start the car mic uplink, so the phone has to pick up with its own microphone.
+        val phoneOwnMicrophone = AirPlayPersistence.loadPhoneOwnMicrophone(this)
+        if (phoneOwnMicrophone) {
+            appendLog("Microphone: iPhone self-pickup mode; car mic uplink withheld")
+        }
+        return CarPlayMediaEngine(
             sink = sink,
-            microphoneEnabled = microphoneAvailable,
+            microphoneEnabled = microphoneAvailable && !phoneOwnMicrophone,
             audioCaptureDirectory = audioCaptureDirectory(),
+            microphoneCaptureMarker = File(filesDir, "microphone-capture.once"),
         )
+    }
 
     private fun createSessionListener(controllerGeneration: Int): AirPlaySessionListener =
         object : AirPlaySessionListener {
@@ -6375,9 +6457,12 @@ open class CarPlayHostActivity : ComponentActivity() {
                 if (isDestroyed || videoView !== texture) return true
                 val unsafeDecoder = textureUnsafeVideoDecoder()
                 val mode = carPlayVideoSurfaceMode(
-                    texture.isHardwareAccelerated, smoothVideo, directVideoOutput, textureUnsafeDecoder = unsafeDecoder != null)
+                    texture.isHardwareAccelerated, smoothVideo, directVideoOutput,
+                    textureUnsafeDecoder = unsafeDecoder != null,
+                )
                 appendLog("Video output mode=$mode windowHardwareAccelerated=${texture.isHardwareAccelerated} " +
-                    "smoothVideo=$smoothVideo directVideoOutput=$directVideoOutput textureUnsafeDecoder=${unsafeDecoder ?: "none"}")
+                    "smoothVideo=$smoothVideo directVideoOutput=$directVideoOutput textureUnsafeDecoder=${unsafeDecoder ?: "none"} " +
+                    "fixedRangeDecoder=$fixedRangeDecoder")
                 if (mode == CarPlayVideoSurfaceMode.TEXTURE) return true
                 useFallbackVideoSurface(texture, unsafeDecoder)
                 return false // Measure the replacement before drawing the software window.
@@ -6431,7 +6516,10 @@ open class CarPlayHostActivity : ComponentActivity() {
             }
         }
         root.addView(viewport, index, texture.layoutParams)
-        appendLog(if (smoothVideo) {
+        appendLog(if (smoothVideo && fixedRangeDecoder) {
+            "Using SurfaceView video output: frames shown as soon as they are decoded; " +
+                "picture adjustments unavailable"
+        } else if (smoothVideo) {
             "Using SurfaceView video output: smooth video, frames shown at the iPhone's frame time + a delay " +
                 "starting at ${smoothVideoDelayMillis(fps)} ms; picture adjustments unavailable"
         } else if (directVideoOutput) {
@@ -6969,6 +7057,12 @@ open class CarPlayHostActivity : ComponentActivity() {
         const val AUDIO_CAPTURE_MARKER = "audio-capture.enabled"
         const val AUDIO_CAPTURE_DIRECTORY = "audio-captures"
         const val PROTOCOL_TRACE_PREFIX = "TRACE "
+        /** Media keys named in the log when they reach this window unclaimed, to map a new panel. */
+        val PANEL_MEDIA_LOG_KEYS = setOf(
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_STOP, KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_HEADSETHOOK,
+        )
         const val SETTINGS_SWIPE_DISTANCE_DP = 72
         const val SETTINGS_SWIPE_DIRECTION_RATIO = 1.15f
         /** A Galaxy Note20 reported the third finger of a swipe 42 ms after the first. */

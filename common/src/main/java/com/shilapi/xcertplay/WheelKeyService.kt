@@ -79,6 +79,13 @@ class WheelKeyService : AccessibilityService() {
     internal var routeActive: () -> Boolean = { CarPlayGlance.snapshot().maneuverType != null }
     internal var requestSiri: () -> Boolean = { CarPlayBackgroundSession.snapshot()?.controller?.requestSiri() == true }
 
+    /** True while the iPhone's CarPlay session is still running, including after the screen is covered. */
+    internal var carPlayConnected: () -> Boolean = {
+        val controller = CarPlayBackgroundSession.snapshot()?.controller
+        controller != null && !controller.isClosed() &&
+            (CarPlayBackgroundSession.active || controller.activeAirPlaySessionToken() != null)
+    }
+
     // With the auto-off setting the joystick ends a while after the last press and when a route starts,
     // so the keys go back to music and volume without a thought.
     private val joystickIdle = Runnable { if (joystick.end()) joystickEnded() }
@@ -189,6 +196,42 @@ class WheelKeyService : AccessibilityService() {
             return true
         }
         if (navigationKeys.owns(event.keyCode, event.deviceId, event.downTime)) return navigationKey(event)
+        // The Camry seek keys arrive as 554/555, and the CarPlay window often is not the focused
+        // window, so the accessibility filter is the path that actually sees them.
+        // Android's audio mode stays off NORMAL during media on this head unit. That is not a
+        // phone call, and treating it as one dropped every seek press.
+        val connected = carPlayConnected()
+        val carPlayCall = BydNavigationOutputs.carPlayCall() != null
+        val wiredSeek = CarPlayMediaButton.pioneerWiredSeek(event.keyCode, event.scanCode, event.deviceId)
+        if (wiredSeek != null && learning == null && connected && !carPlayCall) {
+            if (down && event.repeatCount == 0) {
+                note("Pioneer wired seek ${event.keyCode}/${event.scanCode} -> CarPlay $wiredSeek sent=${sendMedia(wiredSeek)}")
+            }
+            return true
+        }
+        if (CarPlayMediaButton.isPioneerWiredVoice(event.keyCode, event.scanCode, event.deviceId) &&
+            learning == null && connected && !carPlayCall) {
+            if (down && event.repeatCount == 0) {
+                val sent = requestSiri()
+                handler.post {
+                    val shown = OwnScreenStart.bringCarPlayToFront(this)
+                    note("Pioneer wired voice ${event.keyCode}/${event.scanCode} -> Siri sent=$sent shown=$shown")
+                }
+            }
+            return true
+        }
+        // MODE cycles the head unit off the borrowed media source. While CarPlay is connected,
+        // keep that source and put DiPlay's screen back in front.
+        if (CarPlayMediaButton.isPioneerModeKey(event.keyCode, event.scanCode, event.deviceId) &&
+            learning == null && connected) {
+            if (down && event.repeatCount == 0) {
+                handler.post {
+                    val shown = OwnScreenStart.bringCarPlayToFront(this)
+                    note("Pioneer mode ${event.keyCode}/${event.scanCode} -> CarPlay in front shown=$shown")
+                }
+            }
+            return true
+        }
         if (CarPlayCallKeys.onKey(this, event.keyCode, down)) return true
         val key = WheelKey.of(event)
         if (BydOutputSettings.carPlayCallControls(this) &&

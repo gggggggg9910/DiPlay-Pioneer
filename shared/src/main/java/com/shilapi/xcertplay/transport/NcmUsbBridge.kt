@@ -44,11 +44,36 @@ class NcmUsbBridge internal constructor(
     /** [System.nanoTime] when the iPhone first took a frame on bulk OUT, or null while it still NAKs the pipe. */
     @Volatile var linkOpenedAtNanos: Long? = null
         private set
-    private val frames = ArrayDeque<ByteArray>()
+
+    /** One received Ethernet frame held in a possibly oversized pooled buffer. */
+    private class Frame(val buffer: ByteArray, val length: Int)
+
+    /**
+     * Reusable view of one received Ethernet frame, returned by [recvView]. The view (and the
+     * buffer it points at) is only valid until the next [recvView]/[recv] call on this bridge;
+     * consumers must copy when they need to retain the bytes.
+     */
+    class FrameView {
+        internal var buffer: ByteArray = ByteArray(0)
+        internal var length: Int = 0
+    }
+
+    private val frames = ArrayDeque<Frame>()
+    // RX frame buffers are recycled instead of reallocated per datagram: video plus audio
+    // otherwise churns young-gen continuously and concurrent GC steals CPU from the pipeline.
+    private val framePool = ArrayDeque<ByteArray>()
+    private var outstandingFrame: Frame? = null
+    private val frameView = FrameView()
     private var queuedBytes = 0
     private var buffered = ByteArray(0)
     private var bufferedSize = 0
     private var optionalShortPacketPad = false
+    // Reused NTB bytes. bulkTransfer pins this array for the whole kernel wait; once the direct
+    // ioctl has worked, transfers copy into directOut first so a slow phone cannot stall GC.
+    private var outScratch = ByteArray(2048)
+    private var nativeOut = UsbBulkTransfer.isAvailable()
+    private var nativeProven = false
+    private val directOut: ByteBuffer? = if (nativeOut) ByteBuffer.allocateDirect(DIRECT_OUT_BYTES) else null
     // A full-speed link uses 64-byte packets; the short-packet pad follows the real packet size.
     private val usbPacketSize = inEndpoint.maxPacketSize.takeIf { it > 0 } ?: USB_PACKET_SIZE
     private val resyncTimes = ArrayDeque<Long>()
@@ -75,23 +100,35 @@ class NcmUsbBridge internal constructor(
     }
 
     /** Wraps one Ethernet frame in one NTB16 block and writes it to bulk OUT. */
-    fun send(frame: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
+    fun send(frame: ByteArray, timeoutMillis: Int) = sendFrames(listOf(frame), timeoutMillis)
+
+    /**
+     * Writes [frames] in order. Frames already sitting together share one NTB, up to
+     * [Ntb16Codec.MAX_OUT_BLOCK], so a burst of ACKs is one USB transfer instead of one each.
+     * Nothing is held back waiting for a later frame.
+     */
+    fun sendFrames(frames: List<ByteArray>, timeoutMillis: Int) = synchronized(writeLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
+        require(frames.isNotEmpty()) { "frames must not be empty" }
+        for (group in Ntb16Codec.chunks(frames)) sendBlock(group, timeoutMillis)
+    }
+
+    private fun sendBlock(frames: List<ByteArray>, timeoutMillis: Int) {
         val sequence = synchronized(stateLock) {
             checkOpenLocked()
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
-        val block = Ntb16Codec.build(frame, sequence)
-        // bulkTransfer() pins `block` in a JNI critical section until it returns (see the read
-        // path above). While the phone still NAKs this pipe, every frame waited out the full
-        // timeout, and each USBMUX write of the iAP2 handshake finished only when one expired:
-        // ~2 s per step on Android 8.1–14 (#634, #335, #301). Until the phone takes its first
-        // frame, a frame that cannot go out at once is dropped, as it was after the full timeout.
-        val transferred = connection.bulkTransfer(
-            outEndpoint,
-            block,
-            block.size,
+        val length = Ntb16Codec.encodedLength(frames.map { it.size })
+        if (outScratch.size < length) outScratch = ByteArray(length)
+        val written = Ntb16Codec.write(frames, sequence, outScratch)
+        check(written == length)
+        // While the phone still NAKs this pipe, every frame waited out the full timeout, and each
+        // USBMUX write of the iAP2 handshake finished only when one expired: ~2 s per step on
+        // Android 8.1–14 (#634, #335, #301). Until the phone takes its first frame, a frame that
+        // cannot go out at once is dropped, as it was after the full timeout.
+        val transferred = transferBlock(
+            length,
             if (bulkOutAccepted) timeoutMillis else minOf(timeoutMillis, NOT_READY_WRITE_TIMEOUT_MILLIS),
         )
         // Before StartCarPlaySession the phone keeps the NCM data path NAKed. Android reports the
@@ -102,16 +139,16 @@ class NcmUsbBridge internal constructor(
                 loggedWriteTimeout = true
                 Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
             }
-            return@synchronized
+            return
         }
         if (!bulkOutAccepted) {
             bulkOutAccepted = true
             linkOpenedAtNanos = System.nanoTime()
             runCatching { onDiagnostic("NCM bulk-out ready after $notReadyFrames dropped frames") }
         }
-        if (transferred != block.size) {
+        if (transferred != length) {
             throw IphoneUsbException.DeviceUnavailable(
-                "NCM write transferred $transferred of ${block.size} bytes",
+                "NCM write transferred $transferred of $length bytes",
             )
         }
         traffic.sent()
@@ -121,34 +158,127 @@ class NcmUsbBridge internal constructor(
         }
     }
 
+    /**
+     * Prefers a direct-buffer ioctl so the kernel wait does not pin [outScratch]. Falls back to
+     * bulkTransfer when the ioctl interface is absent. A timeout is not retried: the URB may
+     * already have been submitted.
+     */
+    private fun transferBlock(length: Int, timeout: Int): Int {
+        val direct = directOut
+        if (nativeOut && direct != null && length <= direct.capacity()) {
+            direct.clear()
+            direct.put(outScratch, 0, length)
+            val result = try {
+                UsbBulkTransfer.transfer(
+                    connection.fileDescriptor,
+                    outEndpoint.address,
+                    direct,
+                    length,
+                    timeout,
+                )
+            } catch (error: UnsatisfiedLinkError) {
+                nativeOut = false
+                runCatching {
+                    onDiagnostic("NCM bulk-out direct ioctl missing: ${error.message}; using bulkTransfer")
+                }
+                UsbBulkTransfer.UNSUPPORTED
+            }
+            if (result >= 0) {
+                if (!nativeProven) {
+                    nativeProven = true
+                    runCatching {
+                        onDiagnostic("NCM bulk-out direct ioctl api=${Build.VERSION.SDK_INT}")
+                    }
+                }
+                return result
+            }
+            if (result != UsbBulkTransfer.UNSUPPORTED &&
+                UsbBulkTransfer.abandonNative(result, nativeProven)
+            ) {
+                nativeOut = false
+                runCatching {
+                    onDiagnostic(
+                        "NCM bulk-out direct ioctl unavailable errno=${-result}; using bulkTransfer",
+                    )
+                }
+            } else if (result != UsbBulkTransfer.UNSUPPORTED) {
+                return -1
+            }
+        }
+        return connection.bulkTransfer(outEndpoint, outScratch, length, timeout)
+    }
+
     /** Frames to and from the iPhone so far, for a report line; see [NcmTrafficCounter]. */
     fun trafficSummary(airPlayPort: Int?): String = traffic.summary(airPlayPort)
 
     /** Whether the iPhone tried to connect to [port] at or after [sinceNanos]; see [NcmTrafficCounter]. */
     fun connectionAttemptSince(port: Int, sinceNanos: Long): Boolean = traffic.connectionAttemptSince(port, sinceNanos)
 
+    internal fun reportPerformance(message: String) { runCatching { onDiagnostic(message) } }
+
     /**
      * Returns the next complete Ethernet frame, or null when [timeoutMillis] elapses without one.
      * USB reads may split or coalesce NTB blocks; this method reassembles whole blocks internally.
+     * Allocates a fresh copy per frame; hot paths should prefer [recvView].
      */
     fun recv(timeoutMillis: Long): ByteArray? {
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         synchronized(readLock) {
             checkOpen()
-            if (frames.isNotEmpty()) return pollFrame()
-
-            val deadline = System.nanoTime() + timeoutMillis * NANOS_PER_MILLISECOND
-            while (true) {
-                drainFrames()
-                if (frames.isNotEmpty()) return pollFrame()
-                val remainingNanos = deadline - System.nanoTime()
-                if (remainingNanos <= 0) return null
-                val chunkLength =
-                    readChunk((remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
-                        ?: continue
-                appendBuffered(readBuffer, chunkLength)
-            }
+            return recvFrameLocked(timeoutMillis)?.let { frame -> frame.buffer.copyOf(frame.length) }
         }
+    }
+
+    /**
+     * Like [recv], but returns a pooled, reusable view instead of a fresh copy. The previous
+     * view is invalidated the moment this method is called again.
+     */
+    fun recvView(timeoutMillis: Long): FrameView? {
+        require(timeoutMillis > 0) { "timeoutMillis must be positive" }
+        synchronized(readLock) {
+            checkOpen()
+            return recvFrameLocked(timeoutMillis)?.let(::pollFrame)
+        }
+    }
+
+    private fun recvFrameLocked(timeoutMillis: Long): Frame? {
+        recycleOutstanding()
+        if (frames.isNotEmpty()) return takeFrame()
+
+        val deadline = System.nanoTime() + timeoutMillis * NANOS_PER_MILLISECOND
+        while (true) {
+            drainFrames()
+            if (frames.isNotEmpty()) return takeFrame()
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) return null
+            val chunkLength =
+                readChunk((remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
+                    ?: continue
+            appendBuffered(readBuffer, chunkLength)
+        }
+    }
+
+    private fun takeFrame(): Frame {
+        val frame = frames.removeFirst()
+        queuedBytes -= frame.length
+        traffic.received(frame.buffer)
+        return frame
+    }
+
+    /** Hands the previously returned view's buffer back to the pool; the caller is done with it. */
+    private fun recycleOutstanding() {
+        val frame = outstandingFrame ?: return
+        outstandingFrame = null
+        if (frame.buffer.size == FRAME_POOL_BUFFER_BYTES && framePool.size < FRAME_POOL_MAX_BUFFERS) {
+            framePool.addLast(frame.buffer)
+        }
+    }
+
+    private fun pollFrame(frame: Frame): FrameView {
+        outstandingFrame = frame
+        frameView.buffer = frame.buffer
+        frameView.length = frame.length
+        return frameView
     }
 
     override fun close() {
@@ -237,7 +367,11 @@ class NcmUsbBridge internal constructor(
                 continue
             }
             if (bufferedSize < blockLength) return
-            for (frame in Ntb16Codec.parse(buffered, 0, blockLength)) enqueueFrame(frame)
+            Ntb16Codec.parseRanges(buffered, 0, blockLength) { start, end ->
+                enqueueFrame(takeFrameBuffer(end - start).also { buffer ->
+                    System.arraycopy(buffered, start, buffer, 0, end - start)
+                }, end - start)
+            }
             discard(blockLength)
             optionalShortPacketPad = blockLength % usbPacketSize == 0
             finishResync()
@@ -305,19 +439,21 @@ class NcmUsbBridge internal constructor(
         bufferedSize += length
     }
 
-    private fun enqueueFrame(frame: ByteArray) {
-        if (frames.size >= MAX_QUEUED_FRAMES || queuedBytes + frame.size > MAX_QUEUED_BYTES) {
-            throw failSession("NCM frame queue exceeded its bounds")
+    private fun takeFrameBuffer(length: Int): ByteArray {
+        while (framePool.isNotEmpty()) {
+            val buffer = framePool.removeFirst()
+            if (buffer.size >= length) return buffer
         }
-        frames.addLast(frame)
-        queuedBytes += frame.size
+        // Standard-size buffers stay pool-eligible; oversized datagrams get a one-off array.
+        return ByteArray(maxOf(length, FRAME_POOL_BUFFER_BYTES))
     }
 
-    private fun pollFrame(): ByteArray {
-        val frame = frames.removeFirst()
-        queuedBytes -= frame.size
-        traffic.received(frame)
-        return frame
+    private fun enqueueFrame(buffer: ByteArray, length: Int) {
+        if (frames.size >= MAX_QUEUED_FRAMES || queuedBytes + length > MAX_QUEUED_BYTES) {
+            throw failSession("NCM frame queue exceeded its bounds")
+        }
+        frames.addLast(Frame(buffer, length))
+        queuedBytes += length
     }
 
     private fun readChunk(timeoutMillis: Long): Int? {
@@ -422,7 +558,12 @@ class NcmUsbBridge internal constructor(
         internal const val NOT_READY_WRITE_TIMEOUT_MILLIS = 20
         private const val MAX_QUEUED_FRAMES = 256
         private const val MAX_QUEUED_BYTES = 1 shl 20
+
+        // RX frame pool: buffers of this size are recycled; anything larger is a one-off.
+        private const val FRAME_POOL_BUFFER_BYTES = 16 * 1024
+        private const val FRAME_POOL_MAX_BUFFERS = 8
         private const val NANOS_PER_MILLISECOND = 1_000_000L
+        private const val DIRECT_OUT_BYTES = 16 * 1024
 
         /**
          * Retries a USB setup call that a vendor kernel can lose to its own cdc_ncm driver, which may

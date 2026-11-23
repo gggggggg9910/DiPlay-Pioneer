@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">車載メディア音源（実験的機能）</string>
+    <string name="settings_pioneer_usb">USB 音声</string>
+    <string name="settings_pioneer_bluetooth">Bluetooth 音声</string>
+    <string name="settings_pioneer_media">メディア音声（アプリ）</string>
+    <string name="settings_pioneer_source_note">次回の CarPlay 接続時に適用されます。純正 Bluetooth でのペアリング履歴が必要です。純正 Bluetooth の音楽を一時停止してください。メディアは QQ Music と同じアプリメディアスロットを使用します。</string>
+</resources>

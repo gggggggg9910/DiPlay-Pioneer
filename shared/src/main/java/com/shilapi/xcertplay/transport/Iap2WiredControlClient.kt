@@ -165,7 +165,7 @@ class Iap2WiredControlClient(
         /** Exact five subscription requests emitted by LIVI's wired bring-up. */
         fun subscriptions(): List<Iap2Frame> = Iap2ControlMessages.subscriptions()
 
-        /** Builds the wired-only CarPlayStartSession message; no NCM or AirPlay socket is opened. */
+        /** Builds the CarPlayStartSession message; the wireless group is set in hybrid mode. */
         fun carPlayStartSession(endpoint: Iap2WiredCarPlayEndpoint): Iap2Frame =
             Iap2CarPlayMessages.startSession(
                 wiredIpv6Addresses = endpoint.ipv6Addresses,
@@ -173,6 +173,7 @@ class Iap2WiredControlClient(
                 deviceIdentifier = endpoint.deviceIdentifier,
                 publicKey = endpoint.publicKey,
                 sourceVersion = endpoint.sourceVersion,
+                wireless = endpoint.wireless,
             )
 
         fun carPlayAvailabilitySummary(payload: ByteArray): String {
@@ -202,6 +203,8 @@ class Iap2WiredCarPlayEndpoint(
     val publicKey: String,
     val sourceVersion: String,
     val deviceIdentifier: String? = null,
+    /** Hybrid mode: tell the iPhone to run the AirPlay session over this Wi-Fi network instead. */
+    val wireless: com.shilapi.xcertplay.iap2.message.Iap2WirelessSessionParameters? = null,
 ) {
     /** A stable copy so a caller cannot mutate a validated endpoint before it is encoded. */
     val ipv6Addresses: List<String> = ipv6Addresses.toList()

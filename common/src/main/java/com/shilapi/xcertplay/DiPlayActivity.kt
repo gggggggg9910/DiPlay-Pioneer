@@ -87,6 +87,7 @@ import com.shilapi.xcertplay.orchestration.ManualHotspotValidation
 import com.shilapi.xcertplay.orchestration.MfiTarget
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.settings.SettingsTheme
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
 import com.shilapi.xcertplay.settings.SettingsWidgets
 import com.shilapi.xcertplay.setup.DiLinkGeneration
 import com.shilapi.xcertplay.setup.SetupGuide
@@ -375,6 +376,16 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Thread({
+            val report = runCatching { com.shilapi.xcertplay.airplay.AirPlayCrypto.chachaSelfTest() }
+                .getOrElse { "fail ${it.javaClass.simpleName}: ${it.message}" }
+            android.util.Log.e("DiPlay-Chacha", report)
+            runCatching {
+                val dir = DiagnosticExportStore.publicDownloadsDirectory()
+                if (!dir.isDirectory) dir.mkdirs()
+                java.io.File(dir, "chacha-self-test.txt").writeText(report)
+            }
+        }, "chacha-self-test").start()
         // Back on the home page finishes this activity while the session runs on, so the icon lands here.
         if (savedInstanceState == null && isLauncherIntent(intent) && CarPlayBackgroundSession.hasSession()) {
             openProjection(); finish(); return
@@ -1770,6 +1781,35 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
             card.addView(exportButton, matchButton(10, 60))
             card.addView(button(getString(R.string.choose_save_location), false) { chooseReportDestination() }, matchButton(10, 60))
             card.addView(button(getString(R.string.settings_report_on_phone), false) { openBackup(SettingsCategory.DIAGNOSTICS) }, matchButton(10, 60))
+            val probeButton = button("Play audio channel test (10 tones)", false) { }.apply {
+                setOnClickListener { view ->
+                    view.isEnabled = false
+                    Thread({
+                        com.shilapi.xcertplay.media.AudioChannelProbe.run(applicationContext) { message ->
+                            android.util.Log.e("xcertplay-usb", message)
+                            runOnUiThread {
+                                (view as? android.widget.Button)?.text = message.takeLast(70)
+                                if (message.contains("finished") || message.contains("refused")) view.isEnabled = true
+                            }
+                        }
+                    }, "diplay-audio-probe").start()
+                }
+            }
+            card.addView(probeButton, matchButton(10, 60))
+            val sourceButton = button("Car audio source probe + switch to APP", false) { }.apply {
+                setOnClickListener { view ->
+                    view.isEnabled = false
+                    Thread({
+                        val outcome = com.shilapi.xcertplay.media.EnforcedAudioChannel.switchSourceToApp()
+                        android.util.Log.e("xcertplay-usb", "audio source manual probe: $outcome")
+                        runOnUiThread {
+                            (view as? android.widget.Button)?.text = outcome.take(60)
+                            view.isEnabled = true
+                        }
+                    }, "diplay-source-probe").start()
+                }
+            }
+            card.addView(sourceButton, matchButton(10, 60))
             val destination = getString(R.string.reports_save_to_downloads_diplay)
             card.addView(label(destination + getString(R.string.nothing_is_sent_automatically_protocol_payloads_and_creden), 14, MUTED).apply { setPadding(0, dp(12), 0, 0) })
             toggle(card, getString(R.string.settings_fps_counter), getString(R.string.settings_fps_counter_description),
@@ -1794,14 +1834,6 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 getString(R.string.default_connection_usb)
             ), connectionModes.indexOf(DiPlayPreferences.defaultConnectionMode(this)), reconnects = false) {
                 DiPlayPreferences.saveDefaultConnectionMode(this, connectionModes[it])
-            }
-            adbToggle(card, R.string.open_after_the_car_starts,
-                R.string.availability_depends_on_your_head_unit_s_startup_settings,
-                read = { AirPlayPersistence.loadAutoStartOnBoot(this) },
-                needsAdb = { CarHotspotSettings.enabled(this) &&
-                    AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL },
-                permissions = { listOf(CarHotspotSetup.Permission.BOOT_LAUNCH) }) {
-                AirPlayPersistence.saveAutoStartOnBoot(this, it)
             }
             val autoConfirmActive = UsbPermissionSetup.Permission.ACCESSIBILITY.granted(this)
             toggle(
@@ -1831,8 +1863,6 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                     setPadding(0, dp(4), 0, dp(8))
                 })
             }
-            card.addView(button(getString(R.string.boot_start_repair), false) { repairBootStart() }, matchButton(6, 56))
-            card.addView(label(getString(R.string.boot_start_repair_desc), 14, MUTED).apply { setPadding(0, dp(8), 0, dp(6)) })
             card.addView(button(chooseIphoneTitle(), false) { choosePhone() }, matchButton(12, 60))
         }
         filteredSection(content, SettingsSection.USB_CONNECTION,
@@ -1919,7 +1949,21 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 { AirPlayPersistence.loadDisplayScalePercent(this) }, reconnects = true,
                 save = { AirPlayPersistence.saveDisplayScalePercent(this, it) },
             )
-            frameRateControl(card)
+            val fpsChoices = listOf(
+                20 to R.string.s_20_fps_lightest_load,
+                25 to R.string.s_25_fps_lighter_load,
+                30 to R.string.s_30_fps_lighter_load,
+                60 to R.string.s_60_fps_smoother_motion,
+            )
+            val savedFps = AirPlayPersistence.loadFps(this)
+            choice(
+                card,
+                getString(R.string.frame_rate),
+                fpsChoices.map { getString(it.second) },
+                fpsChoices.indexOfFirst { it.first == savedFps }.let { found ->
+                    if (found >= 0) found else fpsChoices.indexOfFirst { it.first == 30 }.coerceAtLeast(0)
+                },
+            ) { AirPlayPersistence.saveFps(this, fpsChoices[it].first) }
             carPlayDockControl(card)
             addSystemBarControls(
                 hideTopBar = AirPlayPersistence.loadHideTopBar(this),
@@ -2051,6 +2095,18 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 }
             }
             audioFocusControls(card)
+            val enforcedOptions = listOf("Normal", "Enforced media", "Enforced system sound", "Borrowed token")
+            choice(card, "Enforced audio channel", enforcedOptions,
+                EnforcedAudioChannel.entries.indexOf(AirPlayPersistence.loadEnforcedAudioChannel(this))
+                    .coerceAtLeast(0)) { index ->
+                AirPlayPersistence.saveEnforcedAudioChannel(this, EnforcedAudioChannel.entries[index])
+                markReconnectNeeded()
+            }
+            toggle(card, getString(R.string.phone_own_microphone), getString(R.string.phone_own_microphone_description),
+                AirPlayPersistence.loadPhoneOwnMicrophone(this)) {
+                AirPlayPersistence.savePhoneOwnMicrophone(this, it)
+                markReconnectNeeded()
+            }
             if (resources.getBoolean(R.bool.config_advanced_audio_channel_mapping)) {
                 toggle(card, getString(R.string.advanced_audio_channel_mapping),
                     getString(R.string.use_usage_content_type_routing_instead_of_stream_type),
@@ -2084,6 +2140,18 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
             getString(R.string.car_button_in_carplay), R.drawable.ic_dp_car) { card -> carButtonCard = card; carButtonControls(card) }
         filteredSection(content, SettingsSection.AUDIO_ROUTING,
             getString(R.string.audio_routing), R.drawable.ic_dp_audio) { card ->
+            if (EnforcedAudioChannel.BORROWED_TOKEN.usesPioneerUsbSource(this)) {
+                val sources = com.shilapi.xcertplay.media.PioneerSourceChoice.entries
+                choice(card, getString(R.string.settings_pioneer_source),
+                    listOf(getString(R.string.settings_pioneer_usb), getString(R.string.settings_pioneer_bluetooth),
+                        getString(R.string.settings_pioneer_media)),
+                    sources.indexOf(com.shilapi.xcertplay.media.PioneerSourceChoice.load(this)), reconnects = false) {
+                    com.shilapi.xcertplay.media.PioneerSourceChoice.save(this, sources[it])
+                    AirPlayPersistence.saveEnforcedAudioChannel(this, EnforcedAudioChannel.BORROWED_TOKEN)
+                    markReconnectNeeded()
+                }
+                card.addView(label(getString(R.string.settings_pioneer_source_note), 14, MUTED))
+            }
             mediaChannelControl(card)
             navigationChannelControl(card)
             val gainSlider = overlaySliderRow(
@@ -2899,7 +2967,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
 
     private fun renderBydAdbControls(controls: LinearLayout, access: LocalAdb.Access) {
         controls.removeAllViews()
-        adbSwitches.keys.retainAll(setOf(R.string.open_after_the_car_starts))
+        adbSwitches.keys.retainAll(emptySet())
         adbStatus = null
         controls.visibility = if (CarHotspotSettings.visible(true, access)) View.VISIBLE else View.GONE
         if (controls.visibility == View.GONE) return
@@ -2911,14 +2979,7 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
             if (AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL) {
                 adbToggle(card, R.string.auto_car_hotspot_title, R.string.auto_car_hotspot_description,
                     read = { CarHotspotSettings.enabled(this) },
-                    permissions = {
-                        buildList {
-                            add(CarHotspotSetup.Permission.HOTSPOT)
-                            if (AirPlayPersistence.loadAutoStartOnBoot(this@DiPlayActivity)) {
-                                add(CarHotspotSetup.Permission.BOOT_LAUNCH)
-                            }
-                        }
-                    }) {
+                    permissions = { listOf(CarHotspotSetup.Permission.HOTSPOT) }) {
                     CarHotspotSettings.setEnabled(this, it)
                     if (!it) startupHotspotCancelled = true
                 }
@@ -3172,33 +3233,6 @@ class DiPlayActivity : ComponentActivity(), AppAppearanceOwner {
                 connect(true)
             }
             .setNegativeButton(getString(R.string.cancel), null).show()
-    }
-
-    // BYD maps the AOSP tether action to its own hotspot screen; other firmware falls back to Wi-Fi settings.
-    // BYD shows that screen as a dialog and closes it unless its own settings or the car home screen is on top,
-    // so the home screen goes first.
-    private fun repairBootStart() {
-        val dialog = appDialogBuilder()
-            .setTitle(getString(R.string.boot_start_repair))
-            .setMessage(getString(R.string.boot_start_repair_running))
-            .setNegativeButton(getString(R.string.common_cancel), null)
-            .show()
-        Thread({
-            val result = runCatching {
-                com.shilapi.xcertplay.hud.BydBootStartRepair.apply(applicationContext, packageName)
-            }.getOrNull()
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                dialog.dismiss()
-                val text = result?.lines?.joinToString("\n")?.let { getString(R.string.boot_start_repair_result, it) }
-                    ?: getString(R.string.adb_check_failed)
-                appDialogBuilder()
-                    .setTitle(getString(R.string.boot_start_repair))
-                    .setMessage(text)
-                    .setPositiveButton(android.R.string.ok, null)
-                    .show()
-            }
-        }, "diplay-boot-repair").start()
     }
 
     /**

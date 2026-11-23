@@ -123,46 +123,13 @@ class CarHotspotSwitchTest {
         assertNull(ShadowAlertDialog.getLatestAlertDialog())
     }
 
-    @Test fun selectingBootFirstGrantsBothRequiredPermissionsFromTheHotspotSwitch() {
+    @Test fun hotspotGrantDoesNotRequestBootLaunch() {
         AirPlayPersistence.saveAutoStartOnBoot(activity, true)
         hotspotSwitch().isChecked = true
         awaitGrant(); completeGrant()
-        assertEquals(listOf(CarHotspotSetup.Permission.HOTSPOT, CarHotspotSetup.Permission.BOOT_LAUNCH), Grant.requested)
+        assertEquals(listOf(CarHotspotSetup.Permission.HOTSPOT), Grant.requested)
         assertTrue(CarHotspotSettings.enabled(activity))
-        assertTrue(CarHotspotSetup.Permission.BOOT_LAUNCH.granted(activity))
-    }
-
-    @Test fun incompleteBootPermissionKeepsTheHotspotSwitchOff() {
-        AirPlayPersistence.saveAutoStartOnBoot(activity, true)
-        Grant.allowed = setOf(CarHotspotSetup.Permission.HOTSPOT)
-        hotspotSwitch().isChecked = true
-        awaitGrant(); completeGrant()
-        assertTrue(CarHotspotSetup.Permission.HOTSPOT.granted(activity))
         assertFalse(CarHotspotSetup.Permission.BOOT_LAUNCH.granted(activity))
-        assertFalse(CarHotspotSettings.enabled(activity))
-    }
-
-    @Test fun selectingBootLaterRequestsOnlyBootPermission() {
-        CarHotspotSettings.setEnabled(activity, true)
-        CarHotspotAdbGrantTest.WritePermission.allowed = true
-        bootSwitch().isChecked = true
-        awaitGrant()
-        assertFalse(AirPlayPersistence.loadAutoStartOnBoot(activity))
-        assertFalse(bootSwitch().isEnabled)
-        completeGrant()
-        assertEquals(listOf(CarHotspotSetup.Permission.BOOT_LAUNCH), Grant.requested)
-        assertTrue(AirPlayPersistence.loadAutoStartOnBoot(activity))
-        assertTrue(CarHotspotSettings.enabled(activity))
-    }
-
-    @Test fun aFailedBootGrantPreservesHotspotAndDoesNotEnableBootLaunch() {
-        CarHotspotSettings.setEnabled(activity, true)
-        CarHotspotAdbGrantTest.WritePermission.allowed = true
-        Grant.allowed = emptySet()
-        bootSwitch().isChecked = true
-        awaitGrant(); completeGrant()
-        assertFalse(AirPlayPersistence.loadAutoStartOnBoot(activity))
-        assertTrue(CarHotspotSettings.enabled(activity))
     }
 
     @Test fun turningTheSwitchOffDoesNotRequestOrRevokePermissions() {
@@ -281,18 +248,6 @@ class CarHotspotSwitchTest {
         DiPlayActivity::class.java.getDeclaredMethod("updateAdbSwitches").apply {
             isAccessible = true
         }.invoke(activity)
-    }
-
-    private fun bootSwitch(): Switch {
-        switches(controls).firstOrNull {
-            it.contentDescription == activity.getString(R.string.open_after_the_car_starts)
-        }?.let { return it }
-        val bootControls = LinearLayout(activity)
-        DiPlayActivity::class.java.getDeclaredMethod("connectionSettings", LinearLayout::class.java).apply {
-            isAccessible = true
-        }.invoke(activity, bootControls)
-        controls.addView(bootControls)
-        return switches(controls).single { it.contentDescription == activity.getString(R.string.open_after_the_car_starts) }
     }
 
     private fun switches(view: View): List<Switch> = buildList {

@@ -14,11 +14,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.shihab.diplay"
+        applicationId = "jp.pioneer.ceam.test"
         minSdk = 24
         targetSdk = 37
-        versionCode = 41
-        versionName = "0.2.22"
+        versionCode = 114
+        versionName = "0.2.22-pioneer.1"
 
     }
 
@@ -56,6 +56,7 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging { jniLibs.useLegacyPackaging = true }
 }
 
 dependencies {

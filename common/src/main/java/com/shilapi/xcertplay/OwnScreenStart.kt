@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 
@@ -14,6 +15,18 @@ import android.util.Log
  */
 internal object OwnScreenStart {
     private const val TAG = "DiPlay"
+
+    /** Puts the CarPlay screen in front of whatever the head unit is showing. */
+    fun bringCarPlayToFront(context: Context): Boolean = try {
+        context.startActivity(
+            Intent(context, CarPlayHostActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+        )
+        true
+    } catch (error: RuntimeException) {
+        Log.w(TAG, "Opening CarPlay in front failed: ${error.javaClass.simpleName}")
+        false
+    }
 
     fun start(activity: Activity, intent: Intent, log: (String) -> Unit = { Log.w(TAG, it) }): Boolean {
         val screen = intent.component?.className?.substringAfterLast('.') ?: "screen"

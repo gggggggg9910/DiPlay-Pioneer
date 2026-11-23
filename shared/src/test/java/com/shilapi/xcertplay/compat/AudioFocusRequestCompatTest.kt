@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
@@ -54,6 +55,28 @@ class AudioFocusRequestCompatTest {
 
         request.abandon(manager)
         assertSame(sent, shadowOf(manager).lastAbandonedAudioFocusRequest)
+    }
+
+    @Config(sdk = [25])
+    @Test fun pioneerVoiceFocusUsesPrivateStreamAndReleasesTheSameOwner() {
+        val oemRequest = AudioFocusRequestCompat(
+            AudioManager.AUDIOFOCUS_GAIN,
+            AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build(),
+            { change -> changes += change },
+            Handler(Looper.getMainLooper()),
+            focusStreamType = EnforcedAudioChannel.BORROWED_VR_FOCUS_STREAM,
+        )
+        shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+
+        assertEquals(AudioManager.AUDIOFOCUS_REQUEST_GRANTED, oemRequest.request(manager))
+        val sent = shadowOf(manager).lastAudioFocusRequest
+        assertEquals(406, sent.streamType)
+        assertEquals(AudioManager.AUDIOFOCUS_GAIN, sent.durationHint)
+        sent.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+        assertEquals(listOf(AudioManager.AUDIOFOCUS_GAIN), changes)
+
+        oemRequest.abandon(manager)
+        assertSame(sent.listener, shadowOf(manager).lastAbandonedAudioFocusListener)
     }
 
     @Test fun legacyStreamFollowsTheUsage() {

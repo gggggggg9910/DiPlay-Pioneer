@@ -328,6 +328,8 @@
     <string name="s_1_open_car_hotspot_settings_turn_the_hotspot_on_and_sele">1. افتح إعدادات نقطة اتصال السيارة، وشغّل نقطة الاتصال واختر 5 GHz إن توفر.\n2. انسخ الاسم وكلمة المرور أدناه كما هما تماماً.\n3. أبقِ نقطة اتصال السيارة مُشغّلة عند الاتصال. يرسل DiPlay البيانات عبر البلوتوث؛ وينضم iPhone تلقائياً.</string>
     <string name="s_2_pair_your_iphone">2 · اقرن iPhone الخاص بك</string>
     <string name="s_300_ms_default">300 مللي ثانية · الافتراضي</string>
+    <string name="s_20_fps_lightest_load">20 إطاراً/ث · حمل أخف</string>
+    <string name="s_25_fps_lighter_load">25 إطاراً/ث · حمل أخف</string>
     <string name="s_30_fps_lighter_load">30 إطاراً/ث · حمل أخف</string>
     <string name="s_3_connect">3 · اتصل</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. اضغط «تحقق وفعّل» أدناه. يفعّل ذلك خريطة المجموعة واتباع السمة تلقائياً. ستعيد جلسة CarPlay النشطة الاتصال مرة واحدة. يمكنك بعد ذلك فصل الحاسوب.</string>
@@ -692,6 +694,8 @@
     <string name="call_echo_cancellation_description">يحاول تقليل صدى السماعات المرسل إلى الطرف الآخر أثناء مكالمات CarPlay. تعتمد النتيجة على وحدة السيارة. يُطبَّق عند الاتصال التالي بـ CarPlay.</string>
     <string name="call_voice_filter">أصوات مكالمات أوضح (تجريبي)</string>
     <string name="call_voice_filter_description">يخفض الجهير في صوت مكالمات CarPlay. قد يغيّر صوت المتحدثين. يُطبَّق عند الاتصال التالي بـ CarPlay.</string>
+    <string name="phone_own_microphone">التقاط صوت Siri بميكروفون الآيفون نفسه (تجريبي)</string>
+    <string name="phone_own_microphone_description">يتوقف عن إرسال ميكروفون السيارة إلى الآيفون، بحيث يسجّل Siri والمكالمات بميكروفون الآيفون نفسه. تبقى الأصوات ومكالمات الصوت تُشغَّل من مكبرات السيارة. يُطبَّق عند اتصال CarPlay التالي.</string>
     <string name="phone_audio_route">صوت الهاتف في السيارة لمكالمات CarPlay (تجريبي)</string>
     <string name="phone_audio_route_description">يُبقي مكالمة Telecom مفتوحة أثناء مكالمات CarPlay ليتحول صوت السيارة إلى وضع الهاتف وتعمل خاصية إلغاء الصدى الخاصة بها. لا يعمل مُلغي الصدى في DiPlay في هذه المكالمات. قد يخرج صوتك أعلى أو مشوّهاً. متوقف افتراضياً، ويُطبَّق في المكالمة التالية.</string>
     <string name="phone_audio_route_apps">صوت الهاتف في السيارة لمكالمات VoIP في التطبيقات الأخرى (تجريبي)</string>

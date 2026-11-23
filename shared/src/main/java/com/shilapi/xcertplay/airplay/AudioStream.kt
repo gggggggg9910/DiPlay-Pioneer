@@ -111,6 +111,11 @@ class AudioStream(
                 )
                 val wire = packet.data.copyOf(packet.length)
                 val packetNumber = receivedPackets.incrementAndGet()
+                if (packetNumber == 1 && wire.size >= RTP_HEADER_LEN) {
+                    runCatching { onDiagnostic("Audio: RTP first type=$streamType " +
+                        "rtpPayloadType=${wire[1].toInt() and 0x7f} " +
+                        "marker=${wire[1].toInt() and 0x80 != 0} packetBytes=${wire.size}") }
+                }
                 if (wire.size < RTP_HEADER_LEN + TAIL_LEN) {
                     if (packetNumber == 1) {
                         android.util.Log.w(
@@ -180,9 +185,22 @@ class AudioStream(
 
     private fun runControl(socket: DatagramSocket) {
         val buffer = ByteArray(DATAGRAM_BYTES)
+        var controlPackets = 0
         while (!closed.get()) {
+            val packet = DatagramPacket(buffer, buffer.size)
             try {
-                socket.receive(DatagramPacket(buffer, buffer.size))
+                socket.receive(packet)
+                controlPackets++
+                // The phone's own feedback about this stream, if it ever sends any. Nothing here
+                // has been observed on a real session; the first line makes that provable.
+                if (controlPackets == 1 && packet.length > 1) {
+                    runCatching {
+                        onDiagnostic(
+                            "Audio: RTCP first type=$streamType bytes=${packet.length} " +
+                                "pt=${buffer[1].toInt() and 0xff}"
+                        )
+                    }
+                }
             } catch (_: Exception) {
                 if (closed.get()) return
             }

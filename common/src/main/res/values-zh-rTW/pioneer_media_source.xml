@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">原車媒體音源（實驗性）</string>
+    <string name="settings_pioneer_usb">USB 音訊</string>
+    <string name="settings_pioneer_bluetooth">藍牙音訊</string>
+    <string name="settings_pioneer_media">媒體音訊（應用）</string>
+    <string name="settings_pioneer_source_note">下次連接 CarPlay 時生效。藍牙音源需要原車已有配對記錄；請暫停原車藍牙歌曲。媒體音源使用與 QQ 音樂相同的應用媒體槽。</string>
+</resources>

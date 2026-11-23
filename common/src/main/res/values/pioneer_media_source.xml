@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">Factory media source (experimental)</string>
+    <string name="settings_pioneer_usb">USB audio</string>
+    <string name="settings_pioneer_bluetooth">Bluetooth audio</string>
+    <string name="settings_pioneer_media">Media audio (App)</string>
+    <string name="settings_pioneer_source_note">Applies on the next CarPlay connection. Bluetooth source requires a factory pairing record; pause factory Bluetooth music. Media uses the app media slot QQ Music plays on.</string>
+</resources>

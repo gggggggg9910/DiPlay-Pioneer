@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import java.io.File
 import java.net.InetAddress
 
 /** Everything one captured microphone stream needs to send samples to the phone. */
@@ -21,6 +22,8 @@ data class MicrophoneConfig(
      * rule. The report's "Audio: rtp clock" line measures the iPhone's own clock for each stream.
      */
     val opusClockRate: Int = OPUS_CAPTURE_RATE,
+    /** Explicit, one-shot local diagnostic capture; absent during normal operation. */
+    val captureDirectory: File? = null,
 ) {
     val samplesPerPacket: Int
         get() = if (codec == AudioCodecKind.OPUS) {
@@ -39,6 +42,23 @@ data class MicrophoneConfig(
 
     val frameBytes: Int
         get() = samplesPerPacket * channels * 2
+
+    /**
+     * Bound PCM packets, including IPv6/UDP/RTP/AEAD headers, without changing the clock rate.
+     * The phone's negotiated frame cadence is kept whenever it already fits; longer frames are
+     * halved (LIVI's reference accessory always sends the negotiated `framesPerPacket`) until
+     * the whole IPv6 datagram stays below the link MTU without fragmentation.
+     */
+    fun withPcmPacketBudget(ipv6Mtu: Int = 1280): MicrophoneConfig {
+        if (codec != AudioCodecKind.LPCM) return this
+        val overhead = 40 + 8 + MicrophonePacketizer.RTP_HEADER_LEN +
+            MicrophonePacketizer.TAG_LEN + MicrophonePacketizer.NONCE_LEN
+        val maxSamples = (ipv6Mtu - overhead) / (channels * 2)
+        var millis = frameMillis
+        while (millis > 5 && sampleRate * millis / 1000 > maxSamples) millis /= 2
+        if (millis == frameMillis) return this
+        return copy(frameMillis = millis)
+    }
 
     companion object {
         private const val OPUS_SAMPLES_PER_PACKET = 960

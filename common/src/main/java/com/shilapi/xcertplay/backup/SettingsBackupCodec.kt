@@ -22,6 +22,7 @@ object SettingsBackupCodec {
      */
     private val AIRPLAY_KEYS = setOf(
         "display_scale_tenths", "ui_scale_percent", "hevc_enabled", "hevc_software_decoder",
+        "video_decoder_engine",
         // The resolution percentage; display_scale_tenths is its older key, still read when this one is missing.
         "display_scale_percent",
         "advanced_audio_channel_mapping", "audio_focus_enabled", "audio_focus_auto_yield",

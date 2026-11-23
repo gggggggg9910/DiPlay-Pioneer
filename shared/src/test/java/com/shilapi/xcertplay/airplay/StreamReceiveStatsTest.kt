@@ -66,6 +66,18 @@ class StreamReceiveStatsTest {
         assertTrue(output.last().contains("seqForwardGaps=1"))
     }
 
+    @Test fun tcpDoesNotPretendToHaveRtpSequenceEvidenceAndReportsWorkerBacklog() {
+        val output = mutableListOf<String>()
+        val stats = StreamReceiveStats("video", output::add) { 1L }
+        stats.received(128)
+        stats.queued(25_000_000, 4)
+        stats.flush(true)
+        assertTrue(output.single().contains("seqTracked=false"))
+        assertTrue(output.single().contains("decryptQueueMaxUs=25000 decryptDepthMax=4"))
+        stats.flush(true)
+        assertTrue(output.last().contains("decryptQueueMaxUs=0 decryptDepthMax=0"))
+    }
+
     @Test fun decryptTimingIsReportedOnlyWhenRecordedAndThenReset() {
         var clock = 0L
         val output = mutableListOf<String>()
@@ -79,6 +91,6 @@ class StreamReceiveStatsTest {
         assertTrue(output.last().endsWith(" decryptAvgUs=1250 decryptMaxUs=2000 decryptMBps=300"))
         clock = 10_000_000_000L
         stats.flush()
-        assertTrue(!output.last().contains("decrypt"))
+        assertTrue(!output.last().contains("decryptAvgUs="))
     }
 }

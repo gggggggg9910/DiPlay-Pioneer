@@ -418,7 +418,7 @@ class AndroidMediaSinkCodecDetachTest {
             assertTrue("cleanup finished but onExit is still notifying", decoder.field<Thread>("thread").isAlive)
             assertTrue(sink.field<Set<Any>>("closingVideoDecoders").isEmpty())
             // settleDetach can time out, pause, and only reach retire after onExit completed cleanup.
-            sink.javaClass.getDeclaredMethod("retire", Int::class.javaPrimitiveType, decoder.javaClass)
+            sink.javaClass.getDeclaredMethod("retire", Int::class.javaPrimitiveType, StreamVideoDecoder::class.java)
                 .apply { isAccessible = true }.invoke(sink, 110, decoder)
             val alreadyReleased = CountDownLatch(1)
             sink.whenVideoReleased { alreadyReleased.countDown() }

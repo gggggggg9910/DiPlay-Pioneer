@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">Fuente multimedia del coche (experimental)</string>
+    <string name="settings_pioneer_usb">Audio USB</string>
+    <string name="settings_pioneer_bluetooth">Audio Bluetooth</string>
+    <string name="settings_pioneer_media">Audio multimedia (aplicación)</string>
+    <string name="settings_pioneer_source_note">Se aplica en la próxima conexión de CarPlay. Requiere un emparejamiento previo con el Bluetooth original; pausa su música. Multimedia usa la ranura de aplicaciones donde suena QQ Music.</string>
+</resources>

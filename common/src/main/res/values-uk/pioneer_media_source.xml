@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">Медіаджерело автомобіля (експериментально)</string>
+    <string name="settings_pioneer_usb">Аудіо USB</string>
+    <string name="settings_pioneer_bluetooth">Аудіо Bluetooth</string>
+    <string name="settings_pioneer_media">Медіааудіо (застосунок)</string>
+    <string name="settings_pioneer_source_note">Діє з наступного підключення CarPlay. Потрібне збережене сполучення зі штатним Bluetooth; призупиніть його музику. Медіа використовує слот застосунків, у якому грає QQ Music.</string>
+</resources>

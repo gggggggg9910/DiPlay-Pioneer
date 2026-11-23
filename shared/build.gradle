@@ -15,17 +15,19 @@ android {
         }
 
         externalNativeBuild {
-            ndkBuild {
-                arguments 'APP_PLATFORM=android-24'
+            cmake {
+                cppFlags '-O2'
             }
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    ndkVersion = '28.2.13676358'
+    ndkVersion = '27.2.12479018'
+    // 预编译库仍在 src/main/jniLibs。lwIP 由 CMake 编进 libxcertplay_lwip.so。
+    // 其余原生库的源码构建方式见 src/main/jni/Android.mk
     externalNativeBuild {
-        ndkBuild {
-            path = file('src/main/jni/Android.mk')
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
         }
     }
     buildFeatures {
@@ -40,7 +42,32 @@ android {
 dependencies {
     implementation libs.androidx.app
     implementation libs.bouncycastle
+    implementation libs.conscrypt
     implementation libs.jmdns
     testImplementation libs.junit
     testImplementation 'org.robolectric:robolectric:4.17'
 }
+
+// A standalone PIE child keeps the device-private library outside Android's app linker namespace.
+// It is packaged in nativeLibraryDir and exits/reset its USB status if the app heartbeat stops.
+def pioneerHelperOutput = layout.buildDirectory.dir('generated/pioneerUsb/armeabi-v7a')
+android.sourceSets.main.jniLibs.srcDir(layout.buildDirectory.dir('generated/pioneerUsb').get().asFile)
+def buildPioneerUsbHelper = tasks.register('buildPioneerUsbHelper', Exec) {
+    inputs.file('src/main/cpp/pioneer_usb_route.c')
+    outputs.file(pioneerHelperOutput.map { it.file('libdiplay_usb_route.so') })
+    doFirst {
+        def localSdk = new Properties()
+        def localFile = rootProject.file('local.properties')
+        if (localFile.exists()) localFile.withInputStream { localSdk.load(it) }
+        def sdk = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT') ?: localSdk.getProperty('sdk.dir')
+        if (!sdk) throw new GradleException('Android SDK path required for USB helper')
+        def windows = System.getProperty('os.name').toLowerCase().contains('windows')
+        def host = windows ? 'windows-x86_64' : (System.getProperty('os.name').toLowerCase().contains('mac') ? 'darwin-x86_64' : 'linux-x86_64')
+        def clang = new File(sdk, "ndk/${android.ndkVersion}/toolchains/llvm/prebuilt/${host}/bin/clang" + (windows ? '.exe' : ''))
+        def directory = pioneerHelperOutput.get().asFile
+        directory.mkdirs()
+        commandLine clang, '--target=armv7a-linux-androideabi24', '-fPIE', '-pie', '-O2', '-Wall', '-Wextra',
+                file('src/main/cpp/pioneer_usb_route.c'), '-ldl', '-o', new File(directory, 'libdiplay_usb_route.so')
+    }
+}
+tasks.named('preBuild').configure { dependsOn(buildPioneerUsbHelper) }

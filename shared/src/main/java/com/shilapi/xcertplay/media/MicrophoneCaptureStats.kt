@@ -101,7 +101,9 @@ internal class MicrophoneCaptureStats(
         val now = nowNs()
         if (!ended && now - windowStart < REPORT_INTERVAL_NS) return
         if (routeType != null) routedDeviceType = runCatching { routeType() }.getOrNull()
-        val silenceDetail = if (peakSample <= 0 && silence != null) runCatching { " " + silence() }.getOrDefault("") else ""
+        // Always surface audioMode/otherRecordings: a concurrently-running OEM assistant recorder
+        // degrades the shared input path even while our own capture shows healthy peaks.
+        val silenceDetail = if (silence != null) runCatching { " " + silence() }.getOrDefault("") else ""
         emit("Microphone: stats $metadata routedDeviceType=${routedDeviceType ?: "unknown"} " +
             "captureBytes=$capturedBytes reads=$reads zeroReads=$zeroReads readErrors=$readErrors " +
             "readMaxMs=${readMaxNs / 1_000_000} encodedFrames=$encodedFrames " +

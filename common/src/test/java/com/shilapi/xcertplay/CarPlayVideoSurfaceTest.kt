@@ -25,6 +25,11 @@ class CarPlayVideoSurfaceTest {
         assertEquals(CarPlayVideoSurfaceMode.TEXTURE, carPlayVideoSurfaceMode(true, textureUnsafeDecoder = false))
     }
 
+    @Test fun smoothVideoStaysOnTheSurfaceViewWhenTheDecoderWouldOtherwiseWantATexture() {
+        assertEquals(CarPlayVideoSurfaceMode.SURFACE, carPlayVideoSurfaceMode(true, smoothVideo = true))
+        assertEquals(CarPlayVideoSurfaceMode.SURFACE, carPlayVideoSurfaceMode(false, smoothVideo = true))
+    }
+
     @Test fun theFfmpegCodec2DecoderTheRaspberryPiPicksIsTextureUnsafe() {
         // Emteria's Raspberry Pi 5 build lists its FFmpeg decoders before the Android software ones.
         val pi = listOf(

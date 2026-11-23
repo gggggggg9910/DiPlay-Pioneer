@@ -339,6 +339,8 @@
     <string name="s_2_4_ghz">2.4 GHz</string>
     <string name="s_2_pair_your_iphone">2 · 配对你的 iPhone</string>
     <string name="s_300_ms_default">300 毫秒 · 默认</string>
+    <string name="s_20_fps_lightest_load">20 帧/秒 · 更轻负载</string>
+    <string name="s_25_fps_lighter_load">25 帧/秒 · 较轻负载</string>
     <string name="s_30_fps_lighter_load">30 帧/秒 · 减轻负载</string>
     <string name="s_3_connect">3 · 连接</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. 点击下方“检查并启用”。这将启用仪表盘地图和自动主题跟随。正在进行的 CarPlay 会话会重新连接一次，之后即可断开电脑。</string>
@@ -752,6 +754,8 @@
     <string name="call_echo_cancellation_description">尝试减少 CarPlay 通话中发送给对方的扬声器回声。效果取决于车载主机。下次连接 CarPlay 时生效。</string>
     <string name="call_voice_filter">更清晰的通话人声（实验性）</string>
     <string name="call_voice_filter_description">削减 CarPlay 通话音频的低音。这可能改变人声的音色。下次连接 CarPlay 时生效。</string>
+    <string name="phone_own_microphone">Siri 由 iPhone 自己拾音（实验性）</string>
+    <string name="phone_own_microphone_description">不再把车机麦克风回传给 iPhone，Siri 和通话改用 iPhone 自己的麦克风录音。语音和通话声音仍从车机音响播放。下次连接 CarPlay 时生效。</string>
     <string name="phone_audio_route">CarPlay 通话使用车机电话音频（实验性）</string>
     <string name="phone_audio_route_description">CarPlay 通话期间保持一个 Telecom 通话，使车机切换到电话音频状态并启用自带的回声消除。这些通话中 DiPlay 自己的回声消除不会工作。你的声音可能变大或失真。默认关闭，下一次通话生效。</string>
     <string name="phone_audio_route_apps">其他应用的 VoIP 通话使用车机电话音频（实验性）</string>

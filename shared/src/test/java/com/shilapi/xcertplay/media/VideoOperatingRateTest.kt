@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoOperatingRateTest {
@@ -48,5 +50,19 @@ class VideoOperatingRateTest {
         assertEquals(keys, vendorLowLatencyKeys("OMX.qcom.video.decoder.avc"))
         assertEquals(emptyList<String>(), vendorLowLatencyKeys("c2.mtk.avc.decoder"))
         assertEquals(emptyList<String>(), vendorLowLatencyKeys("c2.android.avc.decoder"))
+    }
+
+    @Test fun freescaleVpuKeepsItsOutputBufferCount() {
+        assertTrue(outputBufferCountIsFixed("OMX.Freescale.std.video_decoder.avc.v3.hw-based"))
+        assertTrue(outputBufferCountIsFixed("vendor.hw-based.avc"))
+        assertFalse(outputBufferCountIsFixed("OMX.qcom.video.decoder.avc"))
+        assertFalse(outputBufferCountIsFixed("OMX.google.h264.decoder"))
+        assertFalse(outputBufferCountIsFixed("c2.android.avc.decoder"))
+    }
+
+    @Test fun freescaleVpuNeedsFullRangeColor() {
+        assertTrue(needsFullRangeColor("OMX.Freescale.std.video_decoder.avc.v3.hw-based"))
+        assertFalse(needsFullRangeColor("OMX.qcom.video.decoder.avc"))
+        assertFalse(needsFullRangeColor("OMX.google.h264.decoder"))
     }
 }

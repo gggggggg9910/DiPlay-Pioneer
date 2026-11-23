@@ -21,6 +21,22 @@ internal class VideoStats(
     private var decodeSamples = 0
     private var late = 0
     private var pacingDelayNanos = 0L
+    private var queueWaitMaxNs = 0L
+    private var queueDepthMax = 0
+    private var lastReleasedNs = 0L
+    private var releaseGapMaxNs = 0L
+    private val codecTrace = CodecFrameTrace()
+    private val outputGapUs = IntArray(1024)
+    private var outputGapSamples = 0
+    private var inputWaitMaxNs = 0L
+    private var submitted = 0
+    private var codecOutputs = 0
+    private var inFlight = 0
+    private var inFlightMax = 0
+    private var surfacePresented = 0
+    private var lastPresentedNs = 0L
+    private var presentGapMaxNs = 0L
+    private var callbackLagMaxNs = 0L
 
     @Synchronized fun onReceived(size: Int) {
         val now = nanoTime()
@@ -38,7 +54,38 @@ internal class VideoStats(
         bytes += size
     }
 
-    @Synchronized fun onRendered() { rendered++ }
+    @Synchronized fun onInputWait(ns: Long) { inputWaitMaxNs = maxOf(inputWaitMaxNs, ns) }
+    @Synchronized fun onCodecSubmitted() { submitted++; inFlight++; inFlightMax = maxOf(inFlightMax, inFlight) }
+    @Synchronized fun onCodecOutput(ptsUs: Long = 0L, submittedNs: Long = 0L, outputNs: Long = 0L) { codecOutputs++; inFlight = (inFlight - 1).coerceAtLeast(0); codecTrace.record(ptsUs, submittedNs, outputNs) }
+    fun takeCodecTrace(): String? = codecTrace.drain()
+    @Synchronized fun onCodecReset() { inFlight = 0; lastReleasedNs = 0; lastPresentedNs = 0; codecTrace.reset() }
+
+    @Synchronized fun onRendered() {
+        rendered++
+        val now = nanoTime()
+        if (lastReleasedNs > 0L && now - lastReleasedNs < IDLE_GAP_NS) {
+            releaseGapMaxNs = maxOf(releaseGapMaxNs, now - lastReleasedNs)
+            if (outputGapSamples < outputGapUs.size) outputGapUs[outputGapSamples++] = ((now - lastReleasedNs) / 1000).toInt()
+        }
+        lastReleasedNs = now
+    }
+
+    @Synchronized fun onSurfacePresented(renderNs: Long) {
+        if (renderNs <= 0 || (lastPresentedNs > 0 && renderNs < lastPresentedNs)) return
+        surfacePresented++
+        val gap = renderNs - lastPresentedNs
+        if (lastPresentedNs > 0 && gap < IDLE_GAP_NS) {
+            presentGapMaxNs = maxOf(presentGapMaxNs, gap)
+            com.shilapi.xcertplay.diagnostics.VideoPipelineTrace.slow("surface-present-gap", gap)
+        }
+        lastPresentedNs = renderNs
+        callbackLagMaxNs = maxOf(callbackLagMaxNs, nanoTime() - renderNs)
+    }
+
+    @Synchronized fun onQueue(waitNs: Long, pending: Int) {
+        queueWaitMaxNs = maxOf(queueWaitMaxNs, waitNs)
+        queueDepthMax = maxOf(queueDepthMax, pending)
+    }
 
     @Synchronized fun onRecovery() { recoveries++ }
 
@@ -66,20 +113,30 @@ internal class VideoStats(
         val elapsedNs = now - windowStartNs
         if (elapsedNs < WINDOW_NS) return null
         val seconds = elapsedNs / 1e9
-        if (received == 0 && touchSamples == 0) { windowStartNs = now; return null }
+        if (received == 0 && touchSamples == 0 && surfacePresented == 0) { windowStartNs = now; return null }
         val touchAvgMs = if (touchSamples == 0) -1 else touchLatencySumNs / touchSamples / 1_000_000
+        val gaps = outputGapUs.copyOf(outputGapSamples).also { it.sort() }
+        fun gap(p: Int) = if (gaps.isEmpty()) -1 else gaps[(gaps.size - 1) * p / 100] / 1000
         val line = ("video stats$label rx=%.1ffps shown=%.1ffps maxGap=%dms kbps=%d recoveries=%d " +
-            "touch2frame avg=%dms max=%dms n=%d touchSendMax=%dms").format(
+            "touch2receive avg=%dms max=%dms n=%d touchSendMax=%dms").format(
             received / seconds, rendered / seconds, maxArrivalGapNs / 1_000_000,
             (bytes * 8 / 1000 / seconds).toLong(), recoveries,
-            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples, TouchLatencyProbe.maxSendNs / 1_000_000,
-        ) + decodeSummary()
-        TouchLatencyProbe.maxSendNs = 0
+            touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples, (if (label.isEmpty()) TouchLatencyProbe.takeMaxSendNs() else 0L) / 1_000_000,
+        ) + decodeSummary() + " queueMaxMs=${queueWaitMaxNs / 1_000_000} depthMax=$queueDepthMax" +
+            " releaseGapMaxMs=${releaseGapMaxNs / 1_000_000} shownMeaning=codec-release" +
+            " surfacePresentedN=$surfacePresented presentGapMaxMs=${presentGapMaxNs / 1_000_000}" +
+            " callbackLagMaxMs=${callbackLagMaxNs / 1_000_000}" +
+            " outputGapP50Ms=${gap(50)} outputGapP90Ms=${gap(90)} outputGapSamples=$outputGapSamples" +
+            " inputWaitMaxMs=${inputWaitMaxNs / 1_000_000} submitted=$submitted codecOutputs=$codecOutputs" +
+            " inFlight=$inFlight inFlightMax=$inFlightMax decodeMeaning=submit-to-output"
         Log.i(TAG, line)
         windowStartNs = now
         received = 0; rendered = 0; recoveries = 0; bytes = 0; maxArrivalGapNs = 0
         touchSamples = 0; touchLatencySumNs = 0; maxTouchLatencyNs = 0
         decodeSamples = 0; late = 0
+        queueWaitMaxNs = 0; queueDepthMax = 0; releaseGapMaxNs = 0
+        surfacePresented = 0; presentGapMaxNs = 0; callbackLagMaxNs = 0
+        outputGapSamples = 0; inputWaitMaxNs = 0; submitted = 0; codecOutputs = 0; inFlightMax = inFlight
         return line
     }
 
@@ -89,3 +146,4 @@ internal class VideoStats(
         const val IDLE_GAP_NS = 2_000_000_000L // longer gaps are a static screen, not lag
     }
 }
+

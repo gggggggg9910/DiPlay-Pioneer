@@ -110,6 +110,19 @@ class AudioFocusAutoYieldTest {
         assertTrue(volumes(second).isEmpty())
     }
 
+    @Test fun sourceHandoverReassertsFocusButCannotReopenAClosedCoordinator() {
+        val coordinator = coordinator()
+        val media = track()
+        coordinator.acquire(media, AudioChannel.MEDIA, attributes)
+        val oldListener = coordinator.listener
+        coordinator.reassert()
+        assertSame(oldListener, coordinator.listener)
+        val current = coordinator.listener
+        coordinator.close()
+        coordinator.reassert()
+        assertSame(current, coordinator.listener)
+    }
+
     @Test fun droppedQueuedFocusCallbackReportsWhyWithoutChangingNewMedia() {
         val diagnostics = mutableListOf<String>()
         val coordinator = AudioFocusCoordinator(context, true, true, diagnostics::add).also(coordinators::add)

@@ -328,6 +328,8 @@
     <string name="s_1_open_car_hotspot_settings_turn_the_hotspot_on_and_sele">1. Откройте настройки точки доступа автомобиля, включите её и выберите 5 ГГц, если доступно.\n2. Точно скопируйте ниже её имя и пароль.\n3. Оставляйте точку доступа включённой при подключении. DiPlay передаёт данные по Bluetooth; iPhone подключится автоматически.</string>
     <string name="s_2_pair_your_iphone">2 · Свяжите iPhone</string>
     <string name="s_300_ms_default">300 мс · по умолчанию</string>
+    <string name="s_20_fps_lightest_load">20 кадров/с · меньшая нагрузка</string>
+    <string name="s_25_fps_lighter_load">25 кадров/с · меньшая нагрузка</string>
     <string name="s_30_fps_lighter_load">30 кадров/с · меньшая нагрузка</string>
     <string name="s_3_connect">3 · Подключитесь</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Нажмите «Проверить и включить» ниже. Это включит карту комбинации и автоматическое следование теме. Активный сеанс CarPlay переподключится один раз. После этого можно отключить компьютер.</string>
@@ -692,6 +694,8 @@
     <string name="call_echo_cancellation_description">Пытается уменьшить эхо динамиков, которое слышит собеседник при звонках CarPlay. Результат зависит от головного устройства. Применяется при следующем подключении CarPlay.</string>
     <string name="call_voice_filter">Более чёткие голоса в звонках (экспериментально)</string>
     <string name="call_voice_filter_description">Снижает басы в звонках CarPlay. Может изменить звучание голосов. Применяется при следующем подключении CarPlay.</string>
+    <string name="phone_own_microphone">Siri слушает микрофоном самого iPhone (экспериментально)</string>
+    <string name="phone_own_microphone_description">Микрофон автомобиля больше не отправляется на iPhone: Siri и звонки записываются собственным микрофоном iPhone. Речь и звук звонков по-прежнему воспроизводятся через динамики автомобиля. Применяется при следующем подключении CarPlay.</string>
     <string name="phone_audio_route">Телефонный звук автомобиля для звонков CarPlay (экспериментально)</string>
     <string name="phone_audio_route_description">Удерживает вызов Telecom во время звонков CarPlay, чтобы автомобиль перешёл в телефонный режим звука и заработало его собственное эхоподавление. Эхоподавитель DiPlay в таких звонках не используется. Ваш голос может звучать громче или с искажениями. По умолчанию выключено; действует со следующего звонка.</string>
     <string name="phone_audio_route_apps">Телефонный звук автомобиля для VoIP-звонков в других приложениях (экспериментально)</string>

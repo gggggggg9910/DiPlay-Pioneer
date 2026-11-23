@@ -151,9 +151,16 @@ object AirPlayInfoPlist {
         // Retain Opus whenever platform or bundled software encoding is usable. PCM-only wireless
         // negotiation is not a universal fallback; a missing MediaCodec encoder is insufficient.
         val wirelessInput = if (microphone) (if (microphoneOpus) pcmMono or opus else pcmMono) else null
-        // The iPhone picks one audioFormat for both directions of the call stream, so the call microphone is offered
-        // at the same rates; otherwise a 48 kHz microphone offer let it keep choosing 48 kHz.
-        val telephonyInput = if (callAtCallRate && microphone) 0x154 else wirelessInput
+        // iOS never decodes a plain-PCM accessory input: the accepted real-car session (DiPlay
+        // 0.2.16, software Opus) and captured genuine Siri streams are Opus. Restricting only the
+        // speech row steers Siri onto Opus while media and telephony rows keep the full offer,
+        // so music routing and calls survive; the head unit may not decode Opus prompts.
+        val speechOutput = if (microphoneOpus) opus else pcmMono or opus
+        // The speech input must not offer 48 kHz: iOS 27.2 always picks the highest offered PCM
+        // rate, accepts the 48 kHz uplink at the transport level, and then its recognizer ignores
+        // it (#1094's working Siri ran 24 kHz, 996 B per packet; 0.2.19 measured Siri prompts at
+        // their own lower rate). Offer only the vocoder rates, as telephony does via callAtCallRate.
+        val speechInput = if (microphone) 0x154 else null
 
         return listOf(
             format(100, "compatibility", pcm, pcmInput),
@@ -161,8 +168,8 @@ object AirPlayInfoPlist {
             format(100, "default", speech or opus, wirelessInput),
             format(100, "alert", speech or opus),
             format(100, "media", pcm),
-            format(100, "telephony", telephonyOutput, telephonyInput),
-            format(100, "speechRecognition", pcmMono or opus, wirelessInput),
+            format(100, "telephony", pcmMono or opus, wirelessInput),
+            format(100, "speechRecognition", speechOutput, speechInput),
             format(101, "default", speech or opus),
             format(102, "media", aacLc),
         ) + if (mainBuffered) {

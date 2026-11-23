@@ -224,7 +224,7 @@ class MapEmbedService : Service() {
         private const val MAX_EMBEDS = 8
 
         /** Bind to DiPlay's service with this action (the package differs between builds). */
-        const val ACTION = "com.shihab.diplay.action.EMBED_MAP"
+        const val ACTION = "jp.pioneer.ceam.test.action.EMBED_MAP"
 
         // Launcher -> DiPlay. Every message needs replyTo.
         const val MSG_ATTACH = 1 // KEY_HOST_TOKEN, KEY_DISPLAY_ID, KEY_WIDTH, KEY_HEIGHT

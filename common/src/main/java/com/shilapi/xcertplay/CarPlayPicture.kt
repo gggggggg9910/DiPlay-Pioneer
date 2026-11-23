@@ -5,7 +5,9 @@ import android.content.SharedPreferences
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.media.MediaCodecList
 import android.view.TextureView
+import com.shilapi.xcertplay.media.needsFullRangeColor
 
 /** Pixel adjustments for CarPlay video textures, not Android or OEM UI. */
 internal object CarPlayPicture {
@@ -77,11 +79,41 @@ internal object CarPlayPicture {
         }
     }
 
+    /**
+     * Undo the television-range expansion (out = (in - 16) * 255 / 219) that i.MX6 applies to
+     * CarPlay's 0–255 picture. Scale 219/255 and an offset of 16 put white and black back.
+     */
+    fun limitedRangeCorrection(): ColorMatrix {
+        val scale = 219f / 255f
+        val offset = 16f
+        return ColorMatrix(floatArrayOf(
+            scale, 0f, 0f, 0f, offset,
+            0f, scale, 0f, 0f, offset,
+            0f, 0f, scale, 0f, offset,
+            0f, 0f, 0f, 1f, 0f,
+        ))
+    }
+
+    private val correctLimitedRange: Boolean by lazy {
+        runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+                !info.isEncoder &&
+                    info.supportedTypes.any { it.equals("video/avc", ignoreCase = true) } &&
+                    needsFullRangeColor(info.name)
+            }
+        }.getOrDefault(false)
+    }
+
     fun apply(view: TextureView, prefs: SharedPreferences) {
-        val neutral = originalPreview || keys
-            .all { value(prefs, it) == defaultValue(it) }
-        view.setLayerPaint(if (neutral) null else Paint().apply {
-            colorFilter = ColorMatrixColorFilter(matrix(prefs))
-        })
+        val userNeutral = originalPreview || keys.all { value(prefs, it) == defaultValue(it) }
+        val correct = correctLimitedRange && !originalPreview
+        if (!correct && userNeutral) {
+            view.setLayerPaint(null)
+            return
+        }
+        val combined = ColorMatrix()
+        if (correct) combined.postConcat(limitedRangeCorrection())
+        if (!userNeutral) combined.postConcat(matrix(prefs))
+        view.setLayerPaint(Paint().apply { colorFilter = ColorMatrixColorFilter(combined) })
     }
 }

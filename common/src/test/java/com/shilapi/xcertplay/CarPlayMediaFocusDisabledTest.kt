@@ -3,6 +3,7 @@ package com.shilapi.xcertplay
 import android.media.session.MediaSession
 import android.os.Looper
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import org.junit.After
 import org.junit.Before
@@ -39,6 +40,8 @@ class CarPlayMediaFocusDisabledTest {
         controllers.forEach(CarPlayMediaKeys::detach)
         CarPlayBackgroundSession.clear()
         AirPlayPersistence.saveDisableMediaKeyAudioFocus(app, false)
+        AirPlayPersistence.saveAudioFocusEnabled(app, false)
+        AirPlayPersistence.saveEnforcedAudioChannel(app, EnforcedAudioChannel.NORMAL)
         shadowOf(Looper.getMainLooper()).idle()
     }
 
@@ -46,6 +49,20 @@ class CarPlayMediaFocusDisabledTest {
         val session = start(mock(CarPlayController::class.java).also(controllers::add))
 
         assertTrue(session.isActive)
+        assertFocusDisabled()
+    }
+
+    @Test fun oemRendererKeepsMediaKeysActiveWithoutACompetingMusicFocusRequest() {
+        AirPlayPersistence.saveDisableMediaKeyAudioFocus(app, false)
+        AirPlayPersistence.saveAudioFocusEnabled(app, true)
+        AirPlayPersistence.saveEnforcedAudioChannel(app, EnforcedAudioChannel.BORROWED_TOKEN)
+
+        val session = start(mock(CarPlayController::class.java).also(controllers::add))
+        CarPlayMediaKeys.onMediaAudioChanged(true)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(session.isActive)
+        assertSame(session, currentSession())
         assertFocusDisabled()
     }
 

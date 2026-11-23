@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -17,12 +18,22 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowAudioRecord
 
 /** A recorder that returns no audio is restarted instead of being read in a tight loop (#566). */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [25, 29], manifest = Config.NONE)
 class MicrophoneNoAudioRestartTest {
+    @Implements(AudioRecord::class)
+    class NeverRecordingAudioRecord {
+        @Implementation fun native_start(syncEvent: Int, sessionId: Int): Int = AudioRecord.ERROR_INVALID_OPERATION
+        companion object {
+            @JvmStatic @Implementation
+            fun native_get_min_buff_size(sampleRate: Int, channels: Int, format: Int): Int = 1024
+        }
+    }
     private val diagnostics = CopyOnWriteArrayList<String>()
     private val reads = AtomicInteger()
     private val recorder = AtomicReference<AudioRecord?>()
@@ -61,6 +72,16 @@ class MicrophoneNoAudioRestartTest {
         Thread.sleep(400)
 
         assertTrue(diagnostics.joinToString("\n"), diagnostics.none { it.startsWith("Microphone: recording restarted") })
+    }
+
+    @Test
+    @Config(shadows = [NeverRecordingAudioRecord::class])
+    fun nativeStartFailureCannotBeReportedAsAStartedMicrophone() {
+        val next = MicrophoneUplink(config(), onDiagnostic = diagnostics::add)
+        uplink = next
+        assertFalse(next.start())
+        assertTrue(diagnostics.joinToString("\n"), diagnostics.any { it.contains("stage=RECORDING") && it.contains("code=1") })
+        assertTrue(diagnostics.none { it.startsWith("Microphone: start ") })
     }
 
     private fun provide(read: (Int) -> Int) {

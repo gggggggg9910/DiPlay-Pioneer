@@ -15,6 +15,7 @@ import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
 import java.security.GeneralSecurityException
+import java.security.Provider
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
@@ -44,16 +45,31 @@ object AirPlayCrypto {
         var implementation: String = cipher.provider.name
     }
 
+    /**
+     * Google's Conscrypt, bundled because Android 7's own provider has no ChaCha20-Poly1305.
+     * Held directly so a platform provider of the same name cannot hide it.
+     */
+    private val conscryptProvider: Provider? by lazy {
+        runCatching { org.conscrypt.Conscrypt.newProvider() }.getOrNull()
+    }
+
     // ThreadLocal.withInitial needs API 26.
     private val platformState = object : ThreadLocal<PlatformChacha?>() {
-        override fun initialValue(): PlatformChacha? =
-            PLATFORM_CHACHA_NAMES.firstNotNullOfOrNull { runCatching { Cipher.getInstance(it) }.getOrNull() }
+        override fun initialValue(): PlatformChacha? {
+            val bundled = conscryptProvider?.let { provider ->
+                runCatching { Cipher.getInstance("ChaCha20/Poly1305/NoPadding", provider) }.getOrNull()
+            }
+            return (bundled ?: PLATFORM_CHACHA_NAMES.firstNotNullOfOrNull { runCatching { Cipher.getInstance(it) }.getOrNull() })
                 ?.let(::PlatformChacha)
+        }
     }
+
+    /** Runs the bundled ChaCha self-test. The result is one line, pass or fail. */
+    fun chachaSelfTest(): String = NativeChacha.selfTest()
 
     /** Implementation used by this thread's last successful operation, for diagnostics. */
     val chachaImplementation: String
-        get() = platformState.get()?.implementation ?: "BouncyCastle"
+        get() = NativeChacha.implementation ?: platformState.get()?.implementation ?: "BouncyCastle"
 
     data class X25519KeyPair(val privateKey: ByteArray, val publicKey: ByteArray)
     data class Ed25519KeyPair(val privateKey: ByteArray, val publicKey: ByteArray)
@@ -112,7 +128,8 @@ object AirPlayCrypto {
         nonce: ByteArray,
         plaintext: ByteArray,
         aad: ByteArray = ByteArray(0),
-    ): ByteArray = platformChacha(Cipher.ENCRYPT_MODE, key, nonce, plaintext, aad)
+    ): ByteArray = NativeChacha.seal(key, nonce, plaintext, aad)
+        ?: platformChacha(Cipher.ENCRYPT_MODE, key, nonce, plaintext, aad)
         ?: chachaSealBouncyCastle(key, nonce, plaintext, aad).also {
             platformState.get()?.implementation = "BouncyCastle"
         }
@@ -122,7 +139,8 @@ object AirPlayCrypto {
         nonce: ByteArray,
         ciphertextAndTag: ByteArray,
         aad: ByteArray = ByteArray(0),
-    ): ByteArray = platformChacha(Cipher.DECRYPT_MODE, key, nonce, ciphertextAndTag, aad)
+    ): ByteArray = NativeChacha.open(key, nonce, ciphertextAndTag, aad)
+        ?: platformChacha(Cipher.DECRYPT_MODE, key, nonce, ciphertextAndTag, aad)
         ?: chachaOpenBouncyCastle(key, nonce, ciphertextAndTag, aad).also {
             platformState.get()?.implementation = "BouncyCastle"
         }

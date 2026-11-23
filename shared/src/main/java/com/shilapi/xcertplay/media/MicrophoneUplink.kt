@@ -3,6 +3,7 @@ package com.shilapi.xcertplay.media
 import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.AudioDeviceInfo
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
@@ -12,6 +13,9 @@ import com.shilapi.xcertplay.airplay.AudioCodecKind
 import com.shilapi.xcertplay.airplay.MicrophoneConfig
 import com.shilapi.xcertplay.airplay.MicrophoneCounters
 import com.shilapi.xcertplay.airplay.MicrophonePacketizer
+import com.shilapi.xcertplay.airplay.AudioPacketCapture
+import java.io.IOException
+import com.shilapi.xcertplay.network.UserspaceLink
 import java.io.Closeable
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -44,20 +48,30 @@ internal class MicrophoneUplink(
         )
     },
     private val noAudioRestartMillis: Long = NO_AUDIO_RESTART_MILLIS,
+    /** Some OEM assistants release their input asynchronously after the microphone role changes. */
+    private val initialRecordingWaitMillis: Long = 0,
+    /** Pioneer must keep capture on the car mic when the iPhone advertises USB audio. */
+    private val preferredInputDevice: (() -> AudioDeviceInfo?)? = null,
     /** Read for a report window that recorded no sound; see [silenceDetail]. */
     private val audioManager: AudioManager? = null,
 ) : Closeable {
     private val running = AtomicBoolean(false)
+
+    /** The wire config this uplink was built for; a re-SETUP that changes it needs a new uplink. */
+    internal val streamConfig: MicrophoneConfig get() = config
+    val isRunning: Boolean get() = running.get()
     private val stats = MicrophoneCaptureStats(config, report = { message ->
         Log.i(TAG, message)
         onDiagnostic(message)
     })
     @Volatile private var recorder: AudioRecord? = null
     @Volatile private var socket: DatagramSocket? = null
+    @Volatile private var packetCapture: AudioPacketCapture? = null
     @Volatile private var opusEncoder: MicrophoneOpusEncoder? = null
     @Volatile private var effects: List<AudioEffect> = emptyList()
     @Volatile private var echoCanceller: CallEchoCanceller? = null
     private var thread: Thread? = null
+    private var replyListener: Thread? = null
 
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) return true
@@ -153,8 +167,38 @@ internal class MicrophoneUplink(
                     Log.i(TAG, "microphone echo canceller enabled=${echoCanceller != null} tail=${ECHO_TAIL_MILLIS}ms")
                 }
             }
-            nextRecorder.startRecording()
+            val deadline = System.nanoTime() + initialRecordingWaitMillis * 1_000_000L
+            do {
+                nextRecorder.startRecording()
+                if (nextRecorder.recordingState == AudioRecord.RECORDSTATE_RECORDING ||
+                    System.nanoTime() >= deadline || !running.get()
+                ) break
+                Thread.sleep(50)
+            } while (running.get())
+            if (nextRecorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                stats.failure(MicrophoneFailureStage.RECORDING, code = nextRecorder.recordingState)
+                release()
+                return false
+            }
             stats.started(routeType(nextRecorder))
+            config.captureDirectory?.let { directory ->
+                // At most ten seconds per explicit opt-in; no raw audio is added to reports.
+                packetCapture = AudioPacketCapture(directory, config.payloadType,
+                    maxPackets = maxOf(1, 10_000 / config.frameMillis))
+                runCatching { onDiagnostic("Microphone: one-shot capture enabled maxMillis=10000") }
+            }
+            runCatching {
+                val message = "Microphone: uplink path=${if (UserspaceLink.isActive()) "userspace" else "socket"} " +
+                    "loopbackPeer=${config.host.isLoopbackAddress} phoneKnown=${UserspaceLink.phone != null} " +
+                    "srcPort=${nextSocket.localPort} dst=${config.host.hostAddress}:${config.port} " +
+                    "frameBytes=${config.frameBytes} rtpStep=${config.rtpSamplesPerPacket}"
+                Log.i(TAG, message)
+                onDiagnostic(message)
+            }
+            replyListener = Thread({ listenForReplies(nextSocket) }, "carplay-mic-rx").apply {
+                isDaemon = true
+                start()
+            }
             thread = Thread({ capture(nextRecorder, nextSocket) }, "carplay-mic").apply {
                 isDaemon = true
                 start()
@@ -191,6 +235,18 @@ internal class MicrophoneUplink(
             stats.failure(MicrophoneFailureStage.RECORDER_INITIALIZATION, code = recorder.state)
             recorder.release()
             return null
+        }
+        if (preferredInputDevice != null) {
+            runCatching {
+                val device = preferredInputDevice?.invoke()
+                val accepted = device?.let { recorder.setPreferredDevice(it) }
+                val message = "Microphone: preferred input id=${device?.id} type=${device?.type} accepted=$accepted"
+                Log.i(TAG, message)
+                onDiagnostic(message)
+            }.onFailure { error ->
+                Log.w(TAG, "microphone input selection failed", error)
+                runCatching { onDiagnostic("Microphone: input selection failed ${error.javaClass.simpleName}") }
+            }
         }
         return recorder
     }
@@ -281,7 +337,10 @@ internal class MicrophoneUplink(
         runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO) }
         val frame = ByteArray(config.frameBytes)
         val readBuffer = ByteArray(maxOf(frame.size, MIN_READ_BYTES))
-        val counters = MicrophoneCounters()
+        // A fresh random nonce start, so an unchanged connection key never sees nonce 0 twice
+        // (the compressed-uplink handoff note); sequence and timestamp stay at zero like the
+        // reference accessory.
+        val counters = MicrophoneCounters(nonce = NONCE_RANDOM_START_MASK and java.security.SecureRandom().nextLong())
         val routeInfo = { routeType(recorder) }
         val ownSession = recorder.audioSessionId
         val silence = audioManager?.let { manager -> { silenceDetail(manager, ownSession) } }
@@ -380,6 +439,41 @@ internal class MicrophoneUplink(
         }
     }
 
+    /**
+     * The phone never has to answer the uplink, but if it ever does — an RTCP report, a reject,
+     * anything — that is the only direct evidence of what it thinks of our stream. The socket is
+     * idle otherwise, so watching it costs nothing; the userspace stack injects inbound datagrams
+     * for this port back onto the socket.
+     */
+    private fun listenForReplies(socket: DatagramSocket) {
+        runCatching { socket.soTimeout = INBOUND_POLL_MILLIS }
+        val buffer = ByteArray(2_048)
+        var logged = 0
+        while (running.get() && logged < MAX_INBOUND_REPORTS) {
+            val packet = DatagramPacket(buffer, buffer.size)
+            try {
+                socket.receive(packet)
+            } catch (_: java.net.SocketTimeoutException) {
+                continue
+            } catch (_: Exception) {
+                return
+            }
+            if (packet.length <= 0) continue
+            logged++
+            val version = (buffer[0].toInt() ushr 6) and 0x3
+            val payloadType = buffer[1].toInt() and 0xff
+            val kind = when (payloadType) {
+                in 200..204 -> "rtcp"
+                else -> "other"
+            }
+            val message = "Microphone: inbound datagram $kind bytes=${packet.length} " +
+                "from=${packet.address?.hostAddress} v=$version pt=$payloadType seqOrCount=" +
+                "${(buffer[2].toInt() and 0xff shl 8) or (buffer[3].toInt() and 0xff)}"
+            Log.i(TAG, message)
+            runCatching { onDiagnostic(message) }
+        }
+    }
+
     private fun restartRecording(recorder: AudioRecord): Boolean = try {
         runCatching { recorder.stop() }
         Thread.sleep(READ_RESTART_PAUSE_MILLIS)
@@ -419,12 +513,32 @@ internal class MicrophoneUplink(
             body = body,
             samples = samples,
         )
+        var delivered = false
         try {
+            if (UserspaceLink.isActive()) {
+                val host = if (config.host.isLoopbackAddress) UserspaceLink.phone else config.host
+                if (host != null && UserspaceLink.sendUdp(socket.localPort, host, config.port, packet)) {
+                    delivered = true
+                    stats.sent()
+                } else {
+                    stats.sendFailed()
+                }
+                return
+            }
             socket.send(DatagramPacket(packet, packet.size, config.host, config.port))
+            delivered = true
             stats.sent()
         } catch (error: Exception) {
             stats.sendFailed()
             if (running.get()) throw error
+        } finally {
+            packetCapture?.let { capture ->
+                // Keep precisely the encrypted datagram handed to the sender and its wire PCM.
+                // No session secret or encryption key is persisted.
+                capture.record(packet, packet.copyOfRange(0, MicrophonePacketizer.RTP_HEADER_LEN) + body,
+                    counters.timestamp - samples,
+                    if (delivered) null else IOException("datagram not handed to transport"))
+            }
         }
     }
 
@@ -493,12 +607,16 @@ internal class MicrophoneUplink(
             }
             if (worker.isAlive) worker.interrupt()
         }
+        // The listener exits when release() closes the socket; nudge it if it lingers.
+        replyListener?.let { listener -> if (listener.isAlive) listener.interrupt() }
         release()
     }
 
     @Synchronized
     private fun release() {
         running.set(false)
+        packetCapture?.close()
+        packetCapture = null
         val currentEffects = effects
         effects = emptyList()
         currentEffects.forEach(::releaseEffect)
@@ -533,8 +651,12 @@ internal class MicrophoneUplink(
         const val READ_RESTART_PAUSE_MILLIS = 50L
         const val NO_AUDIO_RESTART_MILLIS = 1_000L
         const val MAX_NO_AUDIO_RESTARTS = 3
-        const val EMPTY_READ_PAUSE_MILLIS = 5L
         const val MAX_LISTED_RECORDINGS = 4
+        const val EMPTY_READ_PAUSE_MILLIS = 5L
+        const val INBOUND_POLL_MILLIS = 200
+        const val MAX_INBOUND_REPORTS = 5
+        /** 48-bit nonce space start; increments stay far from the initial random offset. */
+        const val NONCE_RANDOM_START_MASK = 0xffff_ffff_ffffL
     }
 }
 

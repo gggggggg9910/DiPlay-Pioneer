@@ -73,6 +73,11 @@ class CarPlayVpnService : VpnService() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
+    override fun onCreate() {
+        super.onCreate()
+        DebugBridge.ensureStarted()
+    }
+
     @Synchronized
     fun attach(
         ncm: NcmUsbBridge,
@@ -101,19 +106,28 @@ class CarPlayVpnService : VpnService() {
             val tunFd = Builder()
                 .addAddress(linkLocal, LINK_PREFIX)
                 .addRoute(LINK_LOCAL_ROUTE, LINK_PREFIX)
+                // /30 covers only the IPv4 echo probe (10.73.0.1 local, 10.73.0.2 fake peer).
+                // It does not capture the head unit's 10.46 or 10.110 networks.
+                .addAddress(IPV4_PROBE_ADDRESS, IPV4_PROBE_PREFIX)
+                .addRoute(IPV4_PROBE_NETWORK, IPV4_PROBE_PREFIX)
                 .setSession(SESSION_NAME)
                 .setMtu(TUN_MTU)
                 .setBlocking(true)
-                // An empty app list routes every UID through this VPN. Scope it before establish;
-                // rejection must reach the existing attachment cleanup, never an unscoped retry.
-                .addAllowedApplication(packageName)
+                // Deliberately unscoped. addAllowedApplication routes every other UID around the
+                // tunnel. The routes above are fe80::/64 plus one /30 probe prefix.
                 .establish()
                 ?: throw IOException("VpnService.establish returned null")
             tun = tunFd
+            debugKernelTunnelState(tunFd)
+            startTunnelStatsSampler(generation)
 
-            val ipv6Bridge = Ipv6NcmBridge(ncm, tunFd, hostMac) { error ->
-                onTransportError(generation, listener, error)
-            }
+            val ipv6Bridge = Ipv6NcmBridge(
+                ncm = ncm,
+                tun = tunFd,
+                hostMac = hostMac,
+                hostAddress = address.address,
+                onError = { error -> onTransportError(generation, listener, error) },
+            )
             ipv6Bridge.start()
             bridge = ipv6Bridge
 
@@ -157,6 +171,63 @@ class CarPlayVpnService : VpnService() {
                 AirPlayAttachment(bindAddress, config, identity, pairings, mfi, listener, media,
                     additionalBindAddresses, listenerIdentity),
             )
+            AttachResult.Started
+        } catch (error: Exception) {
+            releaseLocked()
+            lastAttachFailure = attachFailure(error)
+            AttachResult.Failed(error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Starts the wired transport with the iPhone's TCP terminated in userspace and the AirPlay
+     * listener on Android's loopback interface. No VpnService tunnel is established, which also
+     * skips the VPN consent dialog; this is the transport for Android 7.x firmware whose kernel
+     * ignores packets on VpnService tuns.
+     */
+    @Synchronized
+    fun attachUserspace(
+        ncm: NcmUsbBridge,
+        hostMac: ByteArray,
+        hostAddress: ByteArray,
+        config: AirPlayConfig,
+        identity: AirPlayIdentity,
+        pairings: PairingStore,
+        mfi: MfiAuthenticator?,
+        listener: AirPlaySessionListener,
+        media: AirPlayMediaHandler,
+    ): AttachResult {
+        if (active.get()) {
+            Log.i(TAG, "replacing stale NCM/VPN attachment")
+            releaseLocked()
+        }
+        active.set(true)
+        val generation = ++attachGeneration
+        return try {
+            val ipv6Bridge = Ipv6NcmBridge(
+                ncm = ncm,
+                tun = null,
+                hostMac = hostMac,
+                hostAddress = hostAddress,
+                onError = { error -> onTransportError(generation, listener, error) },
+                userspace = true,
+            )
+            bridge = ipv6Bridge
+            // The phone's SYN is answered as soon as NCM runs. The :7000 listener has to be
+            // bound first, or that handshake is reset before AirPlay exists.
+            startAirPlayServer(
+                generation,
+                AirPlayAttachment(
+                    InetAddress.getByName("127.0.0.1"),
+                    config,
+                    identity,
+                    pairings,
+                    mfi,
+                    listener,
+                    media,
+                ),
+            )
+            ipv6Bridge.start()
             AttachResult.Started
         } catch (error: Exception) {
             releaseLocked()
@@ -383,14 +454,123 @@ class CarPlayVpnService : VpnService() {
         tun = null
     }
 
+    /**
+     * Samples the kernel's own view of the tunnel while the attachment is current: /proc/net/dev
+     * for tun interfaces (did our writes even land on the interface?) and /proc/net/snmp6 (did the
+     * IPv6 stack receive, deliver, or discard them?). One line per change, in the persistent
+     * bridge debug file. This separates the three remaining explanations of the tun black hole:
+     * writes never landing (no counter moves), netfilter dropping after receive (InReceives moves
+     * alone), and delivery actually working (InDelivers moves with InReceives).
+     */
+    private fun startTunnelStatsSampler(generation: Int) {
+        Thread(
+            {
+                var last = ""
+                while (active.get() && generation == attachGeneration) {
+                    val snapshot = tunnelStatsLine()
+                    if (snapshot != last) {
+                        appendBridgeDebugLine("tunstats $snapshot")
+                        last = snapshot
+                    }
+                    Thread.sleep(TUN_STATS_INTERVAL_MILLIS)
+                }
+            },
+            "tun-stats",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun tunnelStatsLine(): String {
+        val builder = StringBuilder()
+        runCatching {
+            java.io.File("/proc/net/dev").forEachLine { line ->
+                val name = line.substringBefore(':').trim()
+                if (name.startsWith("tun")) {
+                    val columns = line.substringAfter(':').trim().split(Regex("\\s+"))
+                    if (columns.size >= 16) {
+                        builder.append(name)
+                            .append(" rxBytes=").append(columns[0]).append(" rxPkt=").append(columns[1])
+                            .append(" txBytes=").append(columns[8]).append(" txPkt=").append(columns[9])
+                            .append(' ')
+                    }
+                }
+            }
+        }
+        runCatching {
+            val wanted = setOf(
+                "Ip6InReceives", "Ip6InDelivers", "Ip6InDiscards", "Ip6InAddrErrors",
+                "Ip6InNoRoutes", "Ip6OutRequests", "Ip6OutDiscards",
+            )
+            java.io.File("/proc/net/snmp6").forEachLine { line ->
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.size == 2 && parts[0] in wanted) {
+                    builder.append(parts[0]).append('=').append(parts[1]).append(' ')
+                }
+            }
+        }
+        appendSnmpCounters(
+            builder,
+            java.io.File("/proc/net/snmp"),
+            mapOf(
+                "Ip" to setOf("InReceives", "InDelivers", "InDiscards", "OutRequests"),
+                "Icmp" to setOf("InEchos", "OutEchoReps"),
+            ),
+        )
+        return builder.toString().trim()
+    }
+
+    /** Reads the paired header/value rows of /proc/net/snmp and keeps the named columns. */
+    private fun appendSnmpCounters(
+        builder: StringBuilder,
+        file: java.io.File,
+        wanted: Map<String, Set<String>>,
+    ) {
+        runCatching {
+            val lines = file.readLines()
+            var index = 0
+            while (index + 1 < lines.size) {
+                val header = lines[index].trim().split(Regex("\\s+"))
+                val values = lines[index + 1].trim().split(Regex("\\s+"))
+                val protocol = header.firstOrNull()?.removeSuffix(":")
+                val names = protocol?.let { wanted[it] }
+                if (names != null && values.firstOrNull()?.removeSuffix(":") == protocol) {
+                    header.drop(1).forEachIndexed { column, name ->
+                        val value = values.getOrNull(column + 1) ?: return@forEachIndexed
+                        if (name in names) builder.append(protocol).append(name).append('=').append(value).append(' ')
+                    }
+                }
+                index += 2
+            }
+        }
+    }
+
+    private fun appendBridgeDebugLine(line: String) {
+        try {
+            val file = java.io.File(
+                "/sdcard/Android/data/jp.pioneer.ceam.test/files/bridge_debug.log",
+            )
+            file.parentFile?.mkdirs()
+            java.io.FileWriter(file, true).use { writer ->
+                writer.append(System.currentTimeMillis().toString()).append(' ').append(line).append('\n')
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     companion object {
         private const val TAG = "xcertplay-usb"
         private const val LINK_PREFIX = 64
         private const val LINK_LOCAL_ROUTE = "fe80::"
+        private const val IPV4_PROBE_ADDRESS = "10.73.0.1"
+        private const val IPV4_PROBE_NETWORK = "10.73.0.0"
+        private const val IPV4_PROBE_PREFIX = 30
         private const val SESSION_NAME = "xcertplay CarPlay"
         private const val TUN_MTU = 1500
         private const val TUN_LOOKUP_ATTEMPTS = 10
         private const val TUN_LOOKUP_DELAY_MILLIS = 50L
+        private const val TUN_STATS_INTERVAL_MILLIS = 2_000L
 
         internal data class TunnelCandidate(val name: String, val index: Int, val addresses: List<InetAddress>)
 
@@ -407,8 +587,38 @@ class CarPlayVpnService : VpnService() {
             return owners.firstOrNull { it.name.startsWith("tun") } ?: owners.firstOrNull()
         }
 
-        /** Returns the VPN consent intent, or null when consent is already granted. */
-        fun prepare(context: Context): Intent? = VpnService.prepare(context)
+    /** Returns the VPN consent intent, or null when consent is already granted. */
+    fun prepare(context: Context): Intent? = VpnService.prepare(context)
+
+    /**
+     * Appends the kernel's view of the tunnel (addresses with flags, IPv6 routes, interface name)
+     * to the persistent bridge debug file, so a failed session can show whether Android 7.x left
+     * the link-local address tentative or the tunnel without IPv6 at all.
+     */
+    private fun debugKernelTunnelState(tunFd: ParcelFileDescriptor) {
+        try {
+            val file = java.io.File(
+                "/sdcard/Android/data/jp.pioneer.ceam.test/files/bridge_debug.log",
+            )
+            file.parentFile?.mkdirs()
+            val builder = StringBuilder("--- tunnel established fd=").append(tunFd.fd).append('\n')
+            runCatching {
+                java.io.File("/proc/net/if_inet6").forEachLine { builder.append("if_inet6: ").append(it).append('\n') }
+            }
+            runCatching {
+                java.io.File("/proc/net/ipv6_route").forEachLine { builder.append("route6: ").append(it).append('\n') }
+            }
+            runCatching {
+                NetworkInterface.getNetworkInterfaces()?.let { Collections.list(it) }?.forEach { nic ->
+                    val addresses = Collections.list(nic.inetAddresses).joinToString(",") { it.hostAddress ?: "?" }
+                    builder.append("nic: ").append(nic.name).append(" idx=").append(nic.index)
+                        .append(" up=").append(nic.isUp).append(" ").append(addresses).append('\n')
+                }
+            }
+            java.io.FileWriter(file, true).use { it.append(builder) }
+        } catch (_: Exception) {
+        }
+    }
 
         /**
          * Android 7.1 reported only "Invalid argument" when establish failed (#557); name the

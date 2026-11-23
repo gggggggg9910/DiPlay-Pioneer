@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import com.shilapi.xcertplay.network.UserspaceLink
 import java.io.Closeable
 import java.math.BigInteger
 import java.net.DatagramPacket
@@ -93,7 +94,7 @@ class NtpClock : Closeable {
         val t1 = syncedNtp()
         synchronized(clockLock) { pendingT1 = t1 }
         ntpBytes(t1).copyInto(packet, NTP_TRANSMIT_OFFSET)
-        currentSocket()?.send(DatagramPacket(packet, packet.size, destination))
+        dispatch(packet, destination)
     }
 
     private fun runReceiver() {
@@ -117,7 +118,11 @@ class NtpClock : Closeable {
     private fun handleMessage(message: ByteArray, source: InetSocketAddress) {
         when (message[1].toInt() and 0xff) {
             PT_REQUEST -> respondToRequest(message, source)
-            PT_RESPONSE -> if (source.address == peer?.address) handleResponse(message)
+            // The userspace stack injects the phone's replies from its loopback splicer, so the
+            // datagram's source is not [peer] there; the stack itself is the source gate.
+            PT_RESPONSE -> if (source.address == peer?.address ||
+                (com.shilapi.xcertplay.network.UserspaceLink.isActive() && source.address.isLoopbackAddress)
+            ) handleResponse(message)
         }
     }
 
@@ -129,7 +134,23 @@ class NtpClock : Closeable {
         request.copyInto(response, NTP_ORIGINATE_OFFSET, NTP_TRANSMIT_OFFSET, NTP_PACKET_BYTES)
         ntpBytes(syncedNtp()).copyInto(response, NTP_RECEIVE_OFFSET)
         ntpBytes(syncedNtp()).copyInto(response, NTP_TRANSMIT_OFFSET)
-        currentSocket()?.send(DatagramPacket(response, response.size, source))
+        val destination = if (UserspaceLink.isActive()) peer ?: source else source
+        dispatch(response, destination)
+    }
+
+    /**
+     * Userspace mode terminates the phone on lwIP, so loopback is only the local splice.
+     * Clock packets have to go back to the phone's timing port through that stack.
+     */
+    private fun dispatch(bytes: ByteArray, destination: InetSocketAddress) {
+        val localPort = currentSocket()?.localPort
+        if (localPort != null && UserspaceLink.isActive() &&
+            UserspaceLink.sendUdp(localPort, destination.address, destination.port, bytes)
+        ) {
+            return
+        }
+        if (UserspaceLink.isActive()) return
+        currentSocket()?.send(DatagramPacket(bytes, bytes.size, destination))
     }
 
     private fun handleResponse(response: ByteArray) {

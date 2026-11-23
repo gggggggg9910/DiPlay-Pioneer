@@ -23,6 +23,7 @@ import com.shilapi.xcertplay.compat.AudioFocusRequestCompat
 import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.hud.BydOutputSettings
 import com.shilapi.xcertplay.media.CarPlayNowPlaying
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
 import com.shilapi.xcertplay.orchestration.CarPlayController
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
@@ -294,7 +295,12 @@ internal object CarPlayMediaKeys {
 
     private fun start(context: Context) {
         val expectedController = controller ?: return
-        val focusDisabled = AirPlayPersistence.loadDisableMediaKeyAudioFocus(context)
+        // The renderer owns the private OEM focus. A second STREAM_MUSIC request from the
+        // media-key session would ask the Pioneer router to change to a different audio bus.
+        val enforcedChannel = AirPlayPersistence.loadEnforcedAudioChannel(context)
+        val rendererOwnsOemFocus = enforcedChannel.usesPioneerUsbSource(context) ||
+            (AirPlayPersistence.loadAudioFocusEnabled(context) && enforcedChannel == EnforcedAudioChannel.BORROWED_TOKEN)
+        val focusDisabled = AirPlayPersistence.loadDisableMediaKeyAudioFocus(context) || rendererOwnsOemFocus
         transientFocusInterrupted = false
         val granted = if (focusDisabled) {
             // Some OEMs route physical volume buttons to the focus owner. Keep an active

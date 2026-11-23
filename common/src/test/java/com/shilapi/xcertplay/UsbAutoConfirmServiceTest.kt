@@ -84,6 +84,16 @@ class UsbAutoConfirmServiceTest {
         assertFalse(UsbAutoConfirmService.isTargetPrompt("Allow USB access?", ""))
     }
 
+    @Test fun unsupportedDeviceAlertIsDismissedByItsShortText() {
+        assertTrue(UsbAutoConfirmService.isUnsupportedDevicePrompt("不支持的设备"))
+        assertTrue(UsbAutoConfirmService.isUnsupportedDevicePrompt("不支持的设备 确定"))
+        assertTrue(UsbAutoConfirmService.isUnsupportedDevicePrompt("Unsupported device"))
+        assertFalse(UsbAutoConfirmService.isUnsupportedDevicePrompt(
+            "此车机可能不支持无线 CarPlay，请尝试 USB 连接。",
+        ))
+        assertFalse(UsbAutoConfirmService.isUnsupportedDevicePrompt("不支持的设备" + "x".repeat(240)))
+    }
+
     @Test fun bydAccessibilityScreenIsUsedWhenTheStandardActionIsMissing() {
         val context = org.mockito.Mockito.mock(Context::class.java)
         val opened = mutableListOf<android.content.Intent>()

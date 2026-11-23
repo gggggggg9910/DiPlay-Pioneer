@@ -26,4 +26,14 @@ class HevcSupportTest {
     @Test fun theSettingOffNeverAsksForHevc() {
         assertFalse(HevcSupport.usable(requested = false, softwareChosen = true, decoders = listOf(hardware)))
     }
+
+    @Test fun freescaleSoftwareHevcIsNotHardware() {
+        assertTrue(HevcSupport.isSoftwareDecoderName("OMX.Freescale.std.video_decoder.soft_hevc.sw-based"))
+        assertFalse(HevcSupport.isSoftwareDecoderName("OMX.Freescale.std.video_decoder.avc.v3.hw-based"))
+        assertFalse(HevcSupport.usable(
+            requested = true,
+            softwareChosen = false,
+            decoders = listOf(Decoder("OMX.Freescale.std.video_decoder.soft_hevc.sw-based", hardware = false)),
+        ))
+    }
 }

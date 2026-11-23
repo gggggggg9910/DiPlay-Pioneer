@@ -111,6 +111,31 @@ class NcmUsbBridgeFramingTest {
         assertTrue("A 64-byte link pad is expected, not a resync: $diagnostics", diagnostics.isEmpty())
     }
 
+    @Test fun recvViewReturnsTheFrameAndReusesItsBuffer() {
+        NcmFramingReplay.chunks.add(Ntb16Codec.build(smallFrame, 1) + Ntb16Codec.build(alignedFrame, 2))
+        withBridge { ncm ->
+            val first = ncm.recvView(50)!!
+            assertEquals(smallFrame.size, first.length)
+            assertArrayEquals(smallFrame, first.buffer.copyOf(first.length))
+            // The pooled view must be recycled, not reallocated, once the caller moves on.
+            val second = ncm.recvView(50)!!
+            assertTrue("FrameView should be reused", second === first)
+            assertTrue("Pooled buffer should be reused", second.buffer === first.buffer)
+            assertArrayEquals(alignedFrame, second.buffer.copyOf(second.length))
+        }
+    }
+
+    @Test fun recvStillReturnsExactCopiesAfterViewReads() {
+        NcmFramingReplay.chunks.add(Ntb16Codec.build(smallFrame, 1) + Ntb16Codec.build(smallFrame, 2))
+        withBridge { ncm ->
+            val view = ncm.recvView(50)!!
+            assertArrayEquals(smallFrame, view.buffer.copyOf(view.length))
+            val copy = ncm.recv(50)!!
+            assertEquals(smallFrame.size, copy.size)
+            assertArrayEquals(smallFrame, copy)
+        }
+    }
+
     @Test fun aBlockCutShortInTheMiddleOfAStreamLosesOnlyThatBlock() {
         val second = ByteArray(996) { (it * 17).toByte() }
         val damaged = Ntb16Codec.build(second, 2)

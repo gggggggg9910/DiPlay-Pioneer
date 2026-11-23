@@ -340,6 +340,8 @@
     <string name="s_2_4_ghz">2.4 GHz</string>
     <string name="s_2_pair_your_iphone">2 · Pair your iPhone</string>
     <string name="s_300_ms_default">300 ms · default</string>
+    <string name="s_20_fps_lightest_load">20 fps · lightest load</string>
+    <string name="s_25_fps_lighter_load">25 fps · lighter load</string>
     <string name="s_30_fps_lighter_load">30 fps · lighter load</string>
     <string name="s_3_connect">3 · Connect</string>
     <string name="s_3_tap_check_and_enable_below_this_enables_the_cluster_ma">3. Tap Check and enable below. This enables the cluster map and automatic theme following. An active CarPlay session reconnects once. You can then disconnect the computer.</string>
@@ -791,6 +793,8 @@
     <string name="call_echo_cancellation_description">Tries to reduce speaker echo sent to the other person during CarPlay calls. Results depend on the head unit. Applies at the next CarPlay connection.</string>
     <string name="call_voice_filter">Clearer call voices (experimental)</string>
     <string name="call_voice_filter_description">Cuts bass from CarPlay call audio. This may change how voices sound. Applies at the next CarPlay connection.</string>
+    <string name="phone_own_microphone">iPhone picks up Siri by itself (experimental)</string>
+    <string name="phone_own_microphone_description">Stops sending the car microphone back to the iPhone, so Siri and calls should record through the iPhone\'s own microphone. Speech and call audio keep playing over the car speakers. Apply at the next CarPlay connection.</string>
     <string name="phone_audio_route">Car phone audio for CarPlay calls (experimental)</string>
     <string name="phone_audio_route_description">Holds a Telecom call during CarPlay calls so the car switches to its phone audio state and its own echo cancellation works. DiPlay’s echo canceller stays out of those calls. Your voice can come out louder or distorted. Off by default; applies at the next call.</string>
     <string name="phone_audio_route_apps">Car phone audio for VoIP calls in other apps (experimental)</string>

@@ -25,10 +25,17 @@ class UsbAutoConfirmService : AccessibilityService() {
         if (event == null) return
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val className = event.className?.toString()
-            usbWindowId = if (isSystemUsbWindow(event.packageName?.toString(), className)) {
+            val pkg = event.packageName?.toString()
+            usbWindowId = if (isSystemUsbWindow(pkg, className)) {
                 if (event.windowId != usbWindowId) Log.i(TAG, "System dialog window class=$className; checking its prompt")
                 event.windowId
-            } else null
+            } else {
+                // Pioneer shows "不支持的设备" from its own USB package when the iPhone enumerates.
+                dismissUnsupportedDevice()
+                null
+            }
+        } else if (usbWindowId != event.windowId) {
+            return
         }
         if (usbWindowId != event.windowId) return
         val now = SystemClock.uptimeMillis()
@@ -42,29 +49,31 @@ class UsbAutoConfirmService : AccessibilityService() {
                 node.contentDescription?.toString()?.let(texts::add)
                 false
             }
+            val prompt = texts.joinToString(" ")
             val appLabel = applicationInfo.loadLabel(packageManager).toString()
-            if (!isTargetPrompt(texts.joinToString(" "), appLabel)) {
+            val usbPermission = isTargetPrompt(prompt, appLabel)
+            if (!usbPermission && !isUnsupportedDevicePrompt(prompt)) {
                 if (ignoredWindowId != usbWindowId) {
                     ignoredWindowId = usbWindowId
                     Log.i(TAG, "System dialog does not ask for DiPlay USB access; left alone")
                 }
                 return
             }
-            // Only the system USB dialog's optional default checkbox may be changed.
-            visit(root) { node ->
-                node.isCheckable && !node.isChecked && node.isEnabled &&
-                    node.viewIdResourceName == "android:id/alwaysUse" &&
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (usbPermission) {
+                // Only the system USB dialog's optional default checkbox may be changed.
+                visit(root) { node ->
+                    node.isCheckable && !node.isChecked && node.isEnabled &&
+                        node.viewIdResourceName == "android:id/alwaysUse" &&
+                        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }
             }
-            val confirmed = visit(root) { node ->
-                val label = node.text?.toString()?.trim()
-                node.isEnabled && node.isClickable &&
-                    (node.viewIdResourceName == "android:id/button1" || label in CONFIRM_LABELS) &&
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            }
-            if (confirmed) {
+            if (clickConfirm(root, if (usbPermission) USB_CONFIRM_LABELS else DISMISS_LABELS)) {
                 lastClickTime = now
-                Log.i(TAG, "Successfully auto-confirmed DiPlay USB permission dialog")
+                Log.i(
+                    TAG,
+                    if (usbPermission) "Successfully auto-confirmed DiPlay USB permission dialog"
+                    else "Dismissed unsupported-device dialog",
+                )
             }
         } finally {
             @Suppress("DEPRECATION")
@@ -73,6 +82,38 @@ class UsbAutoConfirmService : AccessibilityService() {
     }
 
     override fun onInterrupt() { usbWindowId = null }
+
+    /** Clicks 确定 on the head unit's short "unsupported device" alert and leaves every other window. */
+    private fun dismissUnsupportedDevice() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastClickTime < DEBOUNCE_MILLIS) return
+        val root = runCatching { rootInActiveWindow }.getOrNull() ?: return
+        try {
+            val pkg = root.packageName?.toString()
+            if (pkg == null || pkg == packageName) return
+            val texts = mutableListOf<String>()
+            visit(root) { node ->
+                node.text?.toString()?.let(texts::add)
+                node.contentDescription?.toString()?.let(texts::add)
+                false
+            }
+            if (!isUnsupportedDevicePrompt(texts.joinToString(" "))) return
+            if (clickConfirm(root, DISMISS_LABELS)) {
+                lastClickTime = now
+                Log.i(TAG, "Dismissed unsupported-device dialog from $pkg")
+            }
+        } finally {
+            @Suppress("DEPRECATION")
+            root.recycle()
+        }
+    }
+
+    private fun clickConfirm(root: AccessibilityNodeInfo, labels: Set<String>): Boolean = visit(root) { node ->
+        val label = node.text?.toString()?.trim()
+        node.isEnabled && node.isClickable &&
+            (node.viewIdResourceName == "android:id/button1" || label in labels) &&
+            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
 
     private fun visit(node: AccessibilityNodeInfo, depth: Int = 0, action: (AccessibilityNodeInfo) -> Boolean): Boolean {
         if (depth > 32) return false
@@ -105,11 +146,30 @@ class UsbAutoConfirmService : AccessibilityService() {
          * consent, report the same name, so [isTargetPrompt] must also find a USB device.
          */
         private const val ALERT_ACTIVITY_CLASS = "android.app.Dialog"
-        private val CONFIRM_LABELS = setOf("确定", "允许", "OK", "Allow", "Confirm")
+        private val USB_CONFIRM_LABELS = setOf("确定", "允许", "OK", "Allow", "Confirm")
+        private val DISMISS_LABELS = USB_CONFIRM_LABELS + setOf(
+            "确认", "知道了", "我知道了", "好的", "关闭", "Close",
+        )
         private val USB_DEVICE_WORDS = Regex("USB|iPhone|iPad", RegexOption.IGNORE_CASE)
 
         internal fun isSystemUsbWindow(pkg: String?, className: String?): Boolean =
             pkg in SYSTEM_PACKAGES && (className in USB_ACTIVITIES || className == ALERT_ACTIVITY_CLASS)
+
+        /**
+         * The Camry head unit shows a short alert, "不支持的设备", when the iPhone enumerates.
+         * CarPlay still attaches; the alert only waits for a tap. Longer screens that merely
+         * mention an unsupported feature stay untouched.
+         */
+        internal fun isUnsupportedDevicePrompt(text: String): Boolean {
+            val compact = text.replace(Regex("\\s+"), "")
+            if (compact.length !in 1..240) return false
+            return compact.contains("不支持的设备") ||
+                compact.contains("不支持此设备") ||
+                compact.contains("不支持该设备") ||
+                compact.contains("设备不受支持") ||
+                compact.contains("unsupporteddevice", ignoreCase = true) ||
+                compact.contains("devicenotsupported", ignoreCase = true)
+        }
 
         /**
          * The prompt must name this app and a USB device. Android 10+ words it "Allow DiPlay to

@@ -30,21 +30,30 @@ internal class StreamReceiveStats(
     private var decryptBytes = 0L
     private var decryptSumNs = 0L
     private var maxDecryptNs = 0L
+    private var sequenceTracked = false
+    private var queueMaxNs = 0L
+    private var queueDepthMax = 0
+    private val arrivalGapsUs = LongArray(512)
+    private var arrivalGapSamples = 0
 
-    fun reading() { readStart = nowNs() }
+    @Synchronized fun reading() { readStart = nowNs() }
 
-    fun received(size: Int, sequence: Int? = null, timestamp: Int? = null) {
+    @Synchronized fun received(size: Int, sequence: Int? = null, timestamp: Int? = null) {
         processingStart = nowNs()
         val readNs = processingStart - readStart
         maxReadNs = maxOf(maxReadNs, readNs)
         if (readNs >= LONG_READ_NS) readsOver250Ms++
         if (lastReceivedNs != 0L) {
+            if (arrivalGapSamples < arrivalGapsUs.size) {
+                arrivalGapsUs[arrivalGapSamples++] = (processingStart - lastReceivedNs) / 1000
+            }
             maxInterArrivalNs = maxOf(maxInterArrivalNs, processingStart - lastReceivedNs)
         }
         lastReceivedNs = processingStart
         packets++
         bytes += size
         if (sequence != null) {
+            sequenceTracked = true
             val expected = nextSequence
             val delta = if (expected == null) 0 else (sequence - expected) and 0xffff
             if (delta < 0x8000) {
@@ -68,21 +77,28 @@ internal class StreamReceiveStats(
     }
 
     /** One payload opened in [durationNs]; reported only for streams that call it. */
-    fun decrypted(durationNs: Long, size: Int) {
+    @Synchronized fun decrypted(durationNs: Long, size: Int) {
         decryptSamples++
         decryptBytes += size
         decryptSumNs += durationNs
         maxDecryptNs = maxOf(maxDecryptNs, durationNs)
     }
 
-    fun processed() {
+    @Synchronized fun queued(waitNs: Long, depth: Int) {
+        queueMaxNs = maxOf(queueMaxNs, waitNs)
+        queueDepthMax = maxOf(queueDepthMax, depth)
+    }
+
+    @Synchronized fun processed() {
         maxProcessNs = maxOf(maxProcessNs, nowNs() - processingStart)
         flush()
     }
 
-    fun flush(ended: Boolean = false) {
+    @Synchronized fun flush(ended: Boolean = false) {
         val now = nowNs()
         if (!ended && now - windowStart < 5_000_000_000L) return
+        val gaps = arrivalGapsUs.copyOf(arrivalGapSamples).also { it.sort() }
+        val gapP95Us = if (gaps.isEmpty()) 0L else gaps[(gaps.size - 1) * 95 / 100]
         runCatching { report("Receive: $label packets=$packets bytes=$bytes readMaxMs=${maxReadNs / 1_000_000} " +
             "processMaxUs=${maxProcessNs / 1000} seqForwardGaps=$forwardGapPackets " +
             "lateOrDuplicate=$lateOrDuplicate interArrivalMaxMs=${maxInterArrivalNs / 1_000_000} " +
@@ -90,8 +106,11 @@ internal class StreamReceiveStats(
             "seqGapLast=[$lastSequenceGap] seqGapAtMs=$lastSequenceGapAtMs ended=$ended " +
             "windowMs=${(now - windowStart).coerceAtLeast(0) / 1_000_000} " +
             "readsOver250Ms=$readsOver250Ms seqGapAfterReadOver250Ms=$seqGapAfterReadOver250Ms " +
-            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms" + decryptSummary()) }
+            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms " +
+            "seqTracked=$sequenceTracked gapP95Us=$gapP95Us " +
+            "decryptQueueMaxUs=${queueMaxNs / 1000} decryptDepthMax=$queueDepthMax" + decryptSummary()) }
         windowStart = now
+        arrivalGapSamples = 0; queueMaxNs = 0; queueDepthMax = 0
         decryptSamples = 0
         decryptBytes = 0
         decryptSumNs = 0

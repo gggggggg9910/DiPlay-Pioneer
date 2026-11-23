@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pioneer_source">مصدر وسائط السيارة (تجريبي)</string>
+    <string name="settings_pioneer_usb">صوت USB</string>
+    <string name="settings_pioneer_bluetooth">صوت البلوتوث</string>
+    <string name="settings_pioneer_media">صوت الوسائط (تطبيق)</string>
+    <string name="settings_pioneer_source_note">يسري عند اتصال CarPlay التالي. يتطلب البلوتوث اقترانًا سابقًا بالسيارة؛ أوقف موسيقى البلوتوث الأصلية مؤقتًا. تستخدم الوسائط فتحة التطبيقات نفسها التي يشغّل منها QQ Music الموسيقى.</string>
+</resources>

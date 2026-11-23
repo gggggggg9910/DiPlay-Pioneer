@@ -7,6 +7,8 @@ import com.shilapi.xcertplay.airplay.AirPlayPhysicalSizeBasis
 import com.shilapi.xcertplay.airplay.CarPlayDisplayScale
 import com.shilapi.xcertplay.airplay.CarPlayClusterDisplay
 import com.shilapi.xcertplay.airplay.ClusterSpeedometerOverlay
+import com.shilapi.xcertplay.media.VideoDecoderEngine
+import com.shilapi.xcertplay.media.EnforcedAudioChannel
 import com.shilapi.xcertplay.airplay.ClusterTurnCardOverlay
 import com.shilapi.xcertplay.airplay.CarPlayUiScale
 import com.shilapi.xcertplay.airplay.AirPlayIdentity
@@ -43,6 +45,8 @@ object AirPlayPersistence {
     private const val KEY_UI_SCALE_PERCENT = "ui_scale_percent"
     private const val KEY_HEVC_ENABLED = "hevc_enabled"
     private const val KEY_HEVC_SOFTWARE_DECODER = "hevc_software_decoder"
+    private const val KEY_VIDEO_DECODER_ENGINE = "video_decoder_engine"
+    private const val KEY_ENFORCED_AUDIO_CHANNEL = "enforced_audio_channel"
     private const val KEY_ADVANCED_AUDIO_CHANNEL_MAPPING = "advanced_audio_channel_mapping"
     private const val KEY_AUDIO_FOCUS_ENABLED = "audio_focus_enabled"
     private const val KEY_AUDIO_FOCUS_AUTO_YIELD = "audio_focus_auto_yield"
@@ -82,6 +86,7 @@ object AirPlayPersistence {
     private const val KEY_CALL_ECHO_CANCELLATION = "call_echo_cancellation"
     private const val KEY_CALL_VOICE_FILTER = "call_voice_filter"
     private const val KEY_CALL_SPEAKERPHONE = "call_speakerphone"
+    private const val KEY_PHONE_OWN_MICROPHONE = "phone_own_microphone"
     private const val KEY_SMOOTH_VIDEO = "smooth_video"
     private const val KEY_MTK_DECODER_TUNING = "mtk_decoder_tuning"
     private const val KEY_DIRECT_VIDEO_OUTPUT = "direct_video_output"
@@ -214,6 +219,34 @@ object AirPlayPersistence {
     fun saveHevcEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_HEVC_ENABLED, enabled)
+            .apply()
+    }
+
+    fun loadVideoDecoderEngine(context: Context): VideoDecoderEngine =
+        runCatching {
+            VideoDecoderEngine.valueOf(
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getString(KEY_VIDEO_DECODER_ENGINE, VideoDecoderEngine.PLATFORM.name)!!,
+            )
+        }.getOrDefault(VideoDecoderEngine.PLATFORM)
+
+    fun saveVideoDecoderEngine(context: Context, engine: VideoDecoderEngine) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_VIDEO_DECODER_ENGINE, engine.name)
+            .apply()
+    }
+
+    fun loadEnforcedAudioChannel(context: Context): EnforcedAudioChannel =
+        runCatching {
+            EnforcedAudioChannel.valueOf(
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getString(KEY_ENFORCED_AUDIO_CHANNEL, EnforcedAudioChannel.NORMAL.name)!!,
+            )
+        }.getOrDefault(EnforcedAudioChannel.NORMAL)
+
+    fun saveEnforcedAudioChannel(context: Context, channel: EnforcedAudioChannel) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_ENFORCED_AUDIO_CHANNEL, channel.name)
             .apply()
     }
 
@@ -810,6 +843,14 @@ object AirPlayPersistence {
 
     fun saveCallSpeakerphone(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_CALL_SPEAKERPHONE, enabled).apply()
+    }
+
+    /** Siri/calls pick up on the iPhone itself; DiPlay keeps its negotiation but never sends car mic audio. */
+    fun loadPhoneOwnMicrophone(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_PHONE_OWN_MICROPHONE, false)
+
+    fun savePhoneOwnMicrophone(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_PHONE_OWN_MICROPHONE, enabled).apply()
     }
 
     fun saveFps(context: Context, fps: Int) {

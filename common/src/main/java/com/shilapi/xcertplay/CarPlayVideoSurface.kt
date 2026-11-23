@@ -1,16 +1,19 @@
 package com.shilapi.xcertplay
 
+import com.shilapi.xcertplay.airplay.AirPlayDisplaySettings
 import com.shilapi.xcertplay.media.CarPlayVideoLayout
+import com.shilapi.xcertplay.media.needsFullRangeColor
 import kotlin.math.roundToInt
 
 internal enum class CarPlayVideoSurfaceMode { TEXTURE, SURFACE }
 
 /**
  * Decide from the attached window, not the declared manifest flag or vehicle model. Smooth video also
- * needs a SurfaceView: only the compositor honours the frame timestamps it releases with. Direct video
- * output (a setting) picks one too: frames go straight to the compositor instead of through the app's
- * own drawing, which can save about a refresh. So does a decoder whose pictures the app's drawing
- * cannot take as a texture ([textureUnsafeDecoder]).
+ * needs a SurfaceView: only the compositor honours the frame timestamps it releases with. On i.MX6 that
+ * texture path is slower still: the UI thread has to copy every frame, and the 23:01 log dropped from
+ * about 29 fps on a SurfaceView to 22 fps with 200–487 ms gaps. Direct video output (a setting) picks a
+ * SurfaceView too. So does a decoder whose pictures the app's drawing cannot take as a texture
+ * ([textureUnsafeDecoder]).
  */
 internal fun carPlayVideoSurfaceMode(
     hardwareAccelerated: Boolean,
@@ -18,11 +21,18 @@ internal fun carPlayVideoSurfaceMode(
     directVideoOutput: Boolean = false,
     textureUnsafeDecoder: Boolean = false,
 ): CarPlayVideoSurfaceMode =
-    if (hardwareAccelerated && !smoothVideo && !directVideoOutput && !textureUnsafeDecoder) CarPlayVideoSurfaceMode.TEXTURE
+    if (hardwareAccelerated && !directVideoOutput && !textureUnsafeDecoder && !smoothVideo)
+        CarPlayVideoSurfaceMode.TEXTURE
     else CarPlayVideoSurfaceMode.SURFACE
 
 /** An installed video decoder, in MediaCodecList order. */
 internal data class VideoDecoderInfo(val name: String, val types: List<String>)
+
+/** True when an H.264 decoder on this device stretches full-range CarPlay pictures. */
+internal fun fixedRangeVideoDecoder(decoders: List<VideoDecoderInfo>): Boolean =
+    decoders.any { decoder ->
+        decoder.types.any { it.equals("video/avc", ignoreCase = true) } && needsFullRangeColor(decoder.name)
+    }
 
 /**
  * The decoder MediaCodec.createDecoderByType picks for one of [mimes] (the first that lists it) when its
@@ -59,7 +69,14 @@ internal data class CarPlaySurfaceBounds(val left: Int, val top: Int, val width:
  * (p90 69-77 ms at about 56 fps, runs A1/A2 in docs/SMOOTH_WIRELESS.md), so it starts at three frame
  * intervals plus 40 ms: 90 ms at 60 fps.
  */
-internal fun smoothVideoDelayMillis(fps: Int): Int = 40 + 3_000 / fps.coerceIn(30, 60)
+internal fun smoothVideoDelayMillis(fps: Int): Int {
+    val rate = if (fps in AirPlayDisplaySettings.MIN_FPS..AirPlayDisplaySettings.MAX_FPS) {
+        fps
+    } else {
+        fps.coerceIn(30, 60)
+    }
+    return 40 + 3_000 / rate
+}
 
 /**
  * Whether the last picture shown over a SurfaceView that came back can go: a frame was rendered since it came

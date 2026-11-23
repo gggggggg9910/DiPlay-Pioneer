@@ -63,6 +63,7 @@ class CarPlayMediaEngine(
     private val sink: MediaSink,
     private val microphoneEnabled: Boolean = false,
     private val audioCaptureDirectory: File? = null,
+    private val microphoneCaptureMarker: File? = null,
 ) : AirPlayMediaHandler {
     internal data class StreamKey(
         val session: AirPlaySession,
@@ -659,6 +660,7 @@ class CarPlayMediaEngine(
             codec = format.codec,
             bitrate = if (format.codec == AudioCodecKind.OPUS) opusBitrate else null,
             opusClockRate = MicrophoneConfig.opusClockRate(formatBits),
+            captureDirectory = consumeMicrophoneCapture(microphoneCaptureMarker),
         )
     }
 
