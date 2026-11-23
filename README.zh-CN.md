@@ -1,41 +1,62 @@
-# DiPlay
+# DiPlay-Pioneer
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [繁體中文](README.zh-TW.md)
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-为兼容的比亚迪安卓车机提供有线及无线 CarPlay，采用 DiAuto 风格界面。
+**[DiPlay](https://github.com/shihabal3amri/DiPlay)（Android 车机有线/无线 CarPlay）在先锋（Pioneer）代工丰田原厂车机平台上的适配版。**
 
-> 这些项目专注于比亚迪汽车。它们可能在其他品牌上运行，但其他品牌不在支持范围内，也没有增加支持或修复其品牌特定兼容性问题的计划。
+基于上游 DiPlay **v0.2.22**（GPL-3.0）分叉。上游面向比亚迪 DiLink 车机；本分支承载丰田系先锋平台车机的适配工作，已在**第八代凯美瑞** A 屏导航版车机上实车验证。平台适配详情见
+[docs/PIONEER_HEADUNITS.md](docs/PIONEER_HEADUNITS.md)。
 
-[下载与中文网站](https://shihabal3amri.github.io/DiPlay/zh-Hans/) · [0.2.22 版本](https://github.com/shihabal3amri/DiPlay/releases/tag/v0.2.22) · [完整说明](README.md) · [报告问题](https://github.com/shihabal3amri/DiPlay/issues/new/choose)
+> 下文未覆盖的通用功能请参考上游文档：[v0.2.22 上游 README](docs/UPSTREAM-README-DiPlay-0.2.22.zh-CN.md)、[安装](docs/INSTALL.md)、[兼容性](docs/COMPATIBILITY.md)。
 
-## 0.2.22 — 公开预览版
+## 已验证硬件
 
-请安装在允许 APK 安装的 Android 7.0+（API 24+）车机上；Android 7.0–8.1 上的有线 CarPlay 已在一台实车上确认，无线连接尚未经实车验证。无需越狱、转接盒、账户或认证服务器。有线及无线核心连接不要求 ADB；可选车辆数据及车辆控制需要支持的固件和已授权网络 ADB。
+| | |
+|---|---|
+| 车型 | 第八代凯美瑞（XV70）A 屏导航版 |
+| 车机 | 先锋代工 OEM（`jp.pioneer.ceam.*` 平台），固件 `2.0.0-rfp-rc6` |
+| SoC | NXP i.MX6 DualLite，4× Cortex-A9 |
+| 系统 | Android 7.1.2（API 25） |
+| 屏幕 | 1280×720 |
+| 视频解码 | Freescale VPU：H.264 最高 1080p，**无 HEVC 硬解** |
 
-Wi-Fi Direct 现支持 Android 7.0–9 的旧版建组路径，使用系统返回的真实凭据。首选信道依赖固件 API；Android 7.0–9 无法读回协商频率，所以请求信道在诊断中标为未经验证，系统默认为信道 0。Android 10+ 保留频率验证。也可使用车机内置热点、USB 或[现有 Wi-Fi／同一局域网](docs/EXISTING_WIFI.md)；同一局域网模式由车机和 iPhone 自行连接外部路由器，DiPlay 不替你修改默认路由。[Android 9 Wi-Fi Direct 限制](docs/ANDROID9_WIFI_DIRECT.md)说明清理及持久配置边界。
+其他搭载先锋平台的丰田车型（亚洲龙、RAV4 等）未经验证，但本分支的适配是面向先锋平台而非凯美瑞车型编写的。
 
-### 新增与修正
+## 本分支的主要改动
 
-- **车机热点**：修正 0.2.21 在比亚迪 DiLink 3.0／4.0 等车机上通过车机热点无线连接时一直停在“正在打开 CarPlay”的问题；之前填写的“热点网络接口（可选）”可以清空。
-- **音乐**：通过 Wi-Fi 播放音乐时恢复 iPhone 的原始速度，每首歌从第一秒起就不再先快 1.5% 再卡顿。
-- **麦克风**：USB 连接时，微信语音、语音备忘录和听写能录到声音，不再是静音。
-- **连接**：插着线重新连接时，有线 CarPlay 第一次就能连上；连接失败时，CarPlay 画面和主页会说明原因以及应该怎么改。
-- **语言**：新增韩语和土耳其语。
-- **新选项（默认关闭）**：在桌面卡片中保留 CarPlay、导航提示音请求音频焦点、按通话本身的采样率通话、DiLink 3.0 全屏仪表地图，以及腾势 N9 的仪表地图。
+- **音频路由**：有界音源切换 + 音频焦点重申（`PioneerMediaRoute`）、媒体音源选择（`PioneerMediaSource`）、蓝牙/USB 音源切换（`PioneerBluetoothRoute`、`PioneerUsbRoute`）、后排音区与 OEM 功放行为、401 媒体槽激活。
+- **麦克风仲裁**：会话级麦克风角色持有，防止 OEM 语音助手抢占（`PioneerMicrophoneRole`、`PioneerRecordFocus`）、上行等待录音就绪、首选输入设备选择、2 声道/48 kHz 音轨整形与语音间隙功放保持。
+- **USB 传输**：bulk 传输改用直接缓冲（`UsbBulkTransfer`，弱 CPU 上避免 GC 卡顿）、NTB16 出站批处理（2048 字节上限，`Ntb16Codec`）。
+- **用户态 IPv6 协议栈**：lwIP 2.2.1 进程内编译（`UserspaceLwip*`、`shared/src/main/cpp/`），应对固件对内核网络路径不友好的车机。
+- **视频**：FFmpeg 7.1.1 纯解码回退（H.264），面向无 HEVC 硬解的单元（`FfmpegVideoDecoder`、`HevcSupport`）、20/25 fps 渲染选项。
+- **操控**：有线 seek/语音/MODE 方控键（`WheelKeyService`、`CarPlayMediaKeys`）、USB 自动确认服务。
+- **调试**：可选的带外调试桥（`DebugBridge`），用于丢弃入站 TCP/ICMP 的固件；仅在自行创建标记文件时启用。
 
-[0.2.22 完整说明](docs/RELEASE-NOTES-0.2.22.md)包含贡献链接及功能限制；构建和验证信息见[验证记录](docs/VALIDATION.md)。Android 7.0–8.1 尚需实车验证，不宣称所有车型的连接、音频或 Siri 问题均已解决。可选功能请停车后测试。
+完整差异即上游 `v0.2.22` 之上的那一个提交。
 
-### 请提供 0.2.22 的新诊断报告
+## 安装说明
 
-1. 更新到 **0.2.22**，复现问题并记录发生时间。开机／自动启动问题发生后，可手动打开 DiPlay 导出。
-2. 打开“**设置 → 诊断 → 保存诊断报告**”。Android 10+ 通常保存到 **Downloads/DiPlay**；Android 7.0–9 会请求存储权限并同样保存到该位置，也可点“选择保存位置”。如选择器或公共存储不可用，应用会使用专用外部或私有目录，并在确认中说明目的地。
-3. 使用确认中的**查看报告／分享**；没有分享应用时，可在报告视图中选择并复制文本。检查 `.txt` 并删除隐私信息，再附到匹配的[现有问题](https://github.com/shihabal3amri/DiPlay/issues)，或[新建问题](https://github.com/shihabal3amri/DiPlay/issues/new/choose)。报告不会自动上传，请勿公开热点密码或私有认证文件。
-4. 注明车型／车机、DiLink/Android/完整固件版本、iPhone/iOS、USB／车机热点／Wi-Fi Direct／同一局域网、相关设置、复现步骤、预期与实际结果及故障时间。
+部分 OEM 车机的安装白名单按包名校验。本分支的 `applicationId` 为 `jp.pioneer.ceam.test`（已验证车机白名单中未被占用的标识）。若你的车机不同，请在构建前修改
+`mobile/build.gradle.kts` 中的 `applicationId` 为你的车机允许的包名。
 
-[从源码构建](docs/BUILD.md)：主应用请选择 `mobile` 模块。`maphost` 是地图演示应用，构建步骤和 APK 路径见说明。
+## 构建
 
-历史记录：[0.2.17](docs/RELEASE-NOTES-0.2.17.md)、[0.2.16](docs/RELEASE-NOTES-0.2.16.md)、[0.2.15](docs/RELEASE-NOTES-0.2.15.md)、[0.2.14](docs/RELEASE-NOTES-0.2.14.md)、[0.2.13](docs/RELEASE-NOTES-0.2.13.md)、[0.2.12](docs/RELEASE-NOTES-0.2.12.md)、[0.2.11](docs/RELEASE-NOTES-0.2.11.md)、[安装与连接](docs/INSTALL.md)。
+与上游相同（`./gradlew :mobile:assembleDebug`），另需：
 
-这是公开预览版，**未经 Apple 认证**。APK 使用从公开 Carlinkit 固件中提取的既有实验性配件身份，并非为 DiPlay 新签发的 MFi 身份；其中的私钥可被提取，未来 iOS 是否继续接受及其公开分发适用性尚未确定。Android 签名密钥和配件身份不进入 Git 或源代码压缩包；普通源代码/CI 构建默认不配置身份。部分车机仍可能卡顿或无法应用图标大小设置。
+- NDK **27.2.12479018** 与 CMake（本分支原生层为 CMake 构建；上游 0.2.22 用 ndk-build）。
+- FFmpeg 静态解码库已预编译置于 `shared/src/main/cpp/prebuilt/`（FFmpeg 7.1.1，仅 H.264
+  解码的精简配置——LGPL-2.1+，见 [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)）。
+  可用 `scripts/build-ffmpeg-android.sh` 自行重建。
 
-标准导航小组件需要支持 Android 小组件的启动器；比亚迪内置主页不接受任意小组件。悬浮地图和嵌入地图需要启用“CarPlay 仪表地图”。应用包含十一种语言：英语、简体中文、繁体中文（台湾）、阿拉伯语、俄语、乌克兰语、西班牙语、日语、意大利语、韩语和土耳其语；网站提供其中八种。应用的香港／澳门及 Hant 选择使用台湾译文，不宣称提供独立地区翻译。[繁体中文说明](README.zh-TW.md)提供安装、设置、隐私和构建指南。源代码、构建说明及许可证随版本提供。
+## 状态与免责声明
+
+- 已在一台凯美瑞车机上经 `perf-35…47` 迭代实车验证；其他车机、固件或 iOS 版本上的行为不做保证。
+- 沿用上游声明：本项目**未经 Apple MFi 认证**，捆绑来自公开 Carlinkit 固件的实验性配件身份，同样的合规不确定性在此适用。
+- 请勿在驾驶中操作或配置本软件。
+
+## 许可证
+
+GPL-3.0，继承自 [xcertplay](https://github.com/shilapi/xcertplay) 与
+[DiPlay](https://github.com/shihabal3amri/DiPlay)。见 [LICENSE](LICENSE) 与
+[docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)。上游 v0.2.22 的 README 保留于
+[docs/UPSTREAM-README-DiPlay-0.2.22.md](docs/UPSTREAM-README-DiPlay-0.2.22.md)。

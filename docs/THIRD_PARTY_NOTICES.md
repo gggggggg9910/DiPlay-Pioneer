@@ -4,6 +4,8 @@
 
 DiPlay is a modified version of [xcertplay by shilapi](https://github.com/shilapi/xcertplay). The upstream receiver is licensed under GNU GPL version 3; the full text is in `LICENSE` and the original README is retained in `docs/UPSTREAM-README.md`.
 
+DiPlay-Pioneer is in turn a fork of [DiPlay v0.2.22](https://github.com/shihabal3amri/DiPlay) (GNU GPL version 3). Upstream's README for that release is preserved in `docs/UPSTREAM-README-DiPlay-0.2.22.md` (with Simplified Chinese and Traditional Chinese translations). All GPL-3.0 obligations, including attribution and source availability, pass through unchanged.
+
 Upstream credits [LIVI](https://github.com/f-io/LIVI) and [Showcase](https://github.com/amineross/showcase) for protocol research. Existing source comments and attribution are preserved.
 
 ## Home and settings UI
@@ -53,3 +55,33 @@ The static site layout, CSS and generator adapt DiAuto (AGPL-3.0). The AGPL lice
 Required Notice: Copyright AndyShaman (https://github.com/AndyShaman/BYDMate)
 
 The maneuver PNGs under `shared/src/main/assets/byd-hud-icons` were imported from BYDMate. Its PolyForm Noncommercial 1.0.0 terms and required notice are included alongside the assets. These files are separate from the project code license; upstream describes them as donor assets and their original provenance is not independently established. The validated DiLink5.1 windshield path uses factory turn codes rather than these images.
+
+## FFmpeg (software H.264 fallback)
+
+DiPlay-Pioneer vendors [FFmpeg 7.1.1](https://ffmpeg.org), compiled to static `libavcodec.a` +
+`libavutil.a` per Android ABI and stored under `shared/src/main/cpp/prebuilt/<abi>/ffmpeg/`. It
+backs `FfmpegNative`/`FfmpegVideoDecoder` — the software H.264 decode fallback for head units
+without HEVC hardware decoding.
+
+The libraries are built with a decode-only trim: `--disable-everything --enable-decoder=h264
+--enable-parser=h264 --enable-parser=hevc`, no network, no GPL components (`--enable-gpl` is not
+used), so they are distributed under the **GNU Lesser General Public License 2.1 or later**.
+FFmpeg's general license information is at https://ffmpeg.org/legal.html. The exact build recipe
+is in `scripts/build-ffmpeg-android.sh`; combined with the public source of this application, it
+provides everything needed to relink modified FFmpeg versions as the LGPL requires. FFmpeg's
+copyright belongs to the FFmpeg project and its contributors.
+
+## lwIP (userspace IPv6 stack)
+
+[lwIP 2.2.1](https://github.com/lwip-tcpip/lwip) (Lightweight IP) is vendored under
+`shared/src/main/cpp/lwip` and compiled in-process into the userspace network stack used on head
+units whose firmware interferes with kernel-level IPv6 handling. lwIP is licensed under a
+BSD-style three-clause license; the full copyright notice, conditions and disclaimer are retained
+in the vendored [COPYING file](../shared/src/main/cpp/lwip/COPYING).
+
+## Conscrypt
+
+The Gradle dependency `org.conscrypt:conscrypt-android` 2.5.3 (Apache License 2.0) provides the
+TLS provider used on old-Android head units whose platform TLS stack is outdated. Its native
+library `libconscrypt_jni.so` ships under `shared/src/main/cpp/prebuilt/` as part of that
+dependency's own distribution.
